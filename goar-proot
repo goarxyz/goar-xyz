@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIST_DIR="$ROOT_DIR/proot"
+ROOTFS="$DIST_DIR/rootfs"
+STATE_DIR="$DIST_DIR/state"
+CONFIG_FILE="$DIST_DIR/goar.env"
+PID_FILE="$STATE_DIR/goar.pid"
+LOG_FILE="$STATE_DIR/goar.log"
+PROOT_BIN="${PROOT_BIN:-$(command -v proot || true)}"
+COMMAND="${1:-app}"
+
+usage() {
+  cat <<'EOF'
+GOAR OS Alpine PRoot launcher
+
+  ./goar-proot build    Build the Alpine rootfs and portable archive.
+  ./goar-proot load     Extract a portable rootfs archive if rootfs/ is absent.
+  ./goar-proot serve    Run the complete GOAR Flask backend in the foreground.
+  ./goar-proot app      Start GOAR, wait for health, and open the local web app.
+  ./goar-proot stop     Stop the local GOAR process started by `app`.
+  ./goar-proot status   Print process and readiness status.
+  ./goar-proot shell    Open a shell inside the Alpine PRoot filesystem.
+EOF
+}
+
+if [[ "$COMMAND" == "help" || "$COMMAND" == "--help" || "$COMMAND" == "-h" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$COMMAND" == "build" ]]; then
+  exec "$DIST_DIR/build-rootfs.sh"
+fi
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  cp "$DIST_DIR/goar.env.example" "$CONFIG_FILE"
+  echo "[GOAR] Created $CONFIG_FILE. Configure a model provider before submitting live agent tasks." >&2
+fi
+# The local configuration contains operator secrets and is intentionally ignored by Git.
+set -a
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+set +a
+
+: "${GOAR_HOST:=127.0.0.1}"
+: "${GOAR_PORT:=8080}"
+: "${GOAR_HOME:=/data/goar}"
+: "${GOAR_WORKSPACE:=/data/workspace}"
+export GOAR_HOST GOAR_PORT GOAR_HOME GOAR_WORKSPACE
+
+# The application branch redirects logs before entering the PRoot guest, so its
+# persistent host-side state must exist before that redirect is opened.
+mkdir -p "$STATE_DIR" "$STATE_DIR/goar" "$STATE_DIR/tmp" "$DIST_DIR/workspace"
+
+load_rootfs() {
+  if [[ -d "$ROOTFS/bin" ]]; then
+    return 0
+  fi
+  local archive
+  archive="$(find "$DIST_DIR" -maxdepth 1 -type f -name 'goar-alpine-*.tar.gz' | sort | tail -n 1 || true)"
+  if [[ -z "$archive" ]]; then
+    echo "GOAR rootfs is missing. Run ./goar-proot build first." >&2
+    exit 1
+  fi
+  mkdir -p "$ROOTFS"
+  tar -xzf "$archive" -C "$ROOTFS"
+  echo "[GOAR] Loaded $archive into $ROOTFS" >&2
+}
+
+require_proot() {
+  if [[ -z "$PROOT_BIN" ]]; then
+    echo "PRoot is required. Install your platform's maintained proot package, then retry." >&2
+    exit 127
+  fi
+}
+
+run_inside() {
+  # Node resolves Playwright driver files outside PRoot's syscall translation on
+  # some hosts. The contained wrapper reads this project-local path and uses it
+  # only for the bundled driver package.
+  mkdir -p "$ROOTFS/etc/goar"
+  printf '%s\n' "$ROOTFS" > "$ROOTFS/etc/goar/host-rootfs-path"
+  "$PROOT_BIN" -0 -R "$ROOTFS" \
+    -b /dev -b /proc -b /sys \
+    -b /etc/resolv.conf:/etc/resolv.conf \
+    -b "$STATE_DIR/goar:/data/goar" \
+    -b "$DIST_DIR/workspace:/data/workspace" \
+    -b "$STATE_DIR/tmp:/tmp" \
+    "$@"
+}
+
+health_request() {
+  local curl_args=(--fail --silent --show-error --max-time 3)
+  if [[ -n "${GOAR_REQUIRE_KEY:-}" ]]; then
+    curl_args+=(-H "X-API-Key: ${GOAR_REQUIRE_KEY}")
+  fi
+  curl "${curl_args[@]}" "http://${GOAR_HOST}:${GOAR_PORT}/health"
+}
+
+case "$COMMAND" in
+  load)
+    load_rootfs
+    ;;
+  serve)
+    load_rootfs
+    require_proot
+    run_inside /usr/local/bin/goar-serve
+    ;;
+  shell)
+    load_rootfs
+    require_proot
+    run_inside /bin/bash
+    ;;
+  app)
+    load_rootfs
+    require_proot
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "[GOAR] Already running at http://${GOAR_HOST}:${GOAR_PORT}/" >&2
+    else
+      rm -f "$PID_FILE"
+      nohup "$ROOT_DIR/goar-proot" serve >"$LOG_FILE" 2>&1 &
+      echo "$!" > "$PID_FILE"
+      for _ in $(seq 1 45); do
+        if health_request >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+      if ! health_request >/dev/null 2>&1; then
+        echo "[GOAR] Backend did not become ready. Inspect $LOG_FILE" >&2
+        exit 1
+      fi
+    fi
+    URL="http://${GOAR_HOST}:${GOAR_PORT}/"
+    echo "[GOAR] Running at $URL"
+    if command -v xdg-open >/dev/null 2>&1; then
+      xdg-open "$URL" >/dev/null 2>&1 || true
+    elif command -v open >/dev/null 2>&1; then
+      open "$URL" || true
+    fi
+    ;;
+  stop)
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      kill "$(cat "$PID_FILE")"
+      echo "[GOAR] Stopped."
+    else
+      echo "[GOAR] Not running."
+    fi
+    rm -f "$PID_FILE"
+    ;;
+  status)
+    if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+      echo "process: running (pid $(cat "$PID_FILE"))"
+    else
+      echo "process: stopped"
+    fi
+    if health_request; then
+      echo
+    else
+      echo "health: unavailable" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

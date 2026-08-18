@@ -14942,10 +14942,14 @@ class SharedBrowserSession:
         try:
             from playwright.sync_api import sync_playwright
             self._pw = sync_playwright().start()
-            self._browser = self._pw.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-            )
+            launch_options: dict[str, Any] = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            }
+            chromium_executable = os.getenv("GOAR_CHROMIUM_EXECUTABLE", "").strip() or getattr(VNC_DESKTOP, "chrome_bin", None)
+            if chromium_executable and Path(str(chromium_executable)).is_file():
+                launch_options["executable_path"] = str(chromium_executable)
+            self._browser = self._pw.chromium.launch(**launch_options)
             self._context = self._browser.new_context(
                 viewport=self._viewport, ignore_https_errors=True
             )

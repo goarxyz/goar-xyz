@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${GOAR_HOME:=/data/goar}"
+: "${GOAR_WORKSPACE:=/data/workspace}"
+: "${GOAR_HOST:=127.0.0.1}"
+: "${GOAR_PORT:=8080}"
+: "${GOAR_AUTO_INSTALL_DESKTOP:=0}"
+
+export GOAR_HOME GOAR_WORKSPACE GOAR_HOST GOAR_PORT GOAR_AUTO_INSTALL_DESKTOP
+
+mkdir -p \
+  "$GOAR_HOME" \
+  "$GOAR_HOME"/history \
+  "$GOAR_HOME"/sessions \
+  "$GOAR_HOME"/skills \
+  "$GOAR_HOME"/task_events \
+  "$GOAR_HOME"/memory \
+  "$GOAR_WORKSPACE" \
+  "$GOAR_WORKSPACE"/downloads \
+  "$GOAR_WORKSPACE"/uploads
+
+for browser in /usr/bin/chromium-browser /usr/bin/chromium; do
+  if [[ -x "$browser" ]]; then
+    export GOAR_CHROMIUM_EXECUTABLE="$browser"
+    break
+  fi
+done
+
+if [[ "$GOAR_HOST" != "127.0.0.1" && "$GOAR_HOST" != "::1" && -z "${GOAR_REQUIRE_KEY:-}" ]]; then
+  echo "[GOAR] Refusing non-local exposure without GOAR_REQUIRE_KEY." >&2
+  exit 64
+fi
+
+cd /opt/goar
+exec /opt/goar/.venv/bin/gunicorn \
+  --chdir /opt/goar \
+  --bind "${GOAR_HOST}:${GOAR_PORT}" \
+  --workers 1 \
+  --threads 8 \
+  --timeout 0 \
+  --graceful-timeout 30 \
+  --keep-alive 5 \
+  --access-logfile - \
+  --error-logfile - \
+  wsgi:application

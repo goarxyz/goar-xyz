@@ -11,7 +11,19 @@
 | Desktop | Xvnc, noVNC, Chromium, and the shared browser control surface | Ephemeral runtime state |
 | Provider configuration | API endpoint, model choice, and optional credential | `.env` or the local setup flow |
 
-## Quick start
+## Alpine PRoot: contained local application
+
+The primary self-contained local path is the [Alpine PRoot distribution](proot/README.md). It builds an Alpine mini-rootfs containing GOAR’s backend, desktop/browser dependencies, and web application, then runs it with a maintained host PRoot binary. The Flask app is served as a normal localhost application at `http://127.0.0.1:8080/`.
+
+```bash
+sudo apt-get install proot
+./goar-proot build
+./goar-proot app
+```
+
+The application command creates `proot/goar.env` on first use. Configure an OpenAI-compatible provider there when live model execution is required. State persists in `proot/state/`, and agent-visible files persist in `proot/workspace/`.
+
+## Docker Compose quick start
 
 Install Docker Engine together with the Docker Compose plugin. Copy the template, create the local workspace, set a model provider, and launch the operating environment. The default network binding is loopback-only, so the console is reachable on the same machine at `http://127.0.0.1:8080/`.
 
@@ -80,7 +92,7 @@ docker volume rm goar-os-state
 
 ## Development and validation
 
-The runtime lives in [`goar-production/`](goar-production/). The root scaffolding is intentionally not required for operation; Docker Compose is the canonical run path. The test suite validates that branding is served from the local image, agent file operations stay inside the mounted workspace, and desktop dependency installation is disabled during normal runtime.
+The runtime lives in [`goar-production/`](goar-production/). The PRoot launcher and Docker Compose distribution are both complete local run paths; the PRoot distribution is the lightweight contained application path, while Compose is useful where Docker is already the standard runtime. The test suite validates that branding is served from the local image, agent file operations stay inside the mounted workspace, and desktop dependency installation is disabled during normal runtime.
 
 ```bash
 make test
@@ -89,7 +101,9 @@ make check
 
 | Path | Role |
 | --- | --- |
-| [`compose.yaml`](compose.yaml) | Local-first service definition, network binding, volume mounts, and runtime hardening. |
+| [`goar-proot`](goar-proot) | Normal-app launcher for the contained Alpine backend. |
+| [`proot/`](proot/) | Reproducible Alpine rootfs builder, PRoot overlay, persistent state, and workspace layout. |
+| [`compose.yaml`](compose.yaml) | Local-first container service definition, network binding, volume mounts, and runtime hardening. |
 | [`goar-production/Dockerfile`](goar-production/Dockerfile) | Reproducible GOAR OS image containing Python, Chromium, VNC/noVNC, and runtime libraries. |
 | [`goar-production/docker-entrypoint.sh`](goar-production/docker-entrypoint.sh) | Minimal state initialization; it never installs packages. |
 | [`goar-production/goar.py`](goar-production/goar.py) | GOAR’s main agent runtime, API, desktop integration, and console. |

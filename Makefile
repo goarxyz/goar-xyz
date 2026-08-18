@@ -1,6 +1,6 @@
 COMPOSE ?= docker compose
 
-.PHONY: init build up down restart logs status shell test check clean
+.PHONY: init build up down restart logs status shell test check clean proot-build proot-app proot-serve proot-stop proot-status proot-shell
 
 init:
 	@test -f .env || cp .env.example .env
@@ -32,7 +32,26 @@ shell:
 
 test:
 	python3 -m compileall -q goar-production
+	bash -n goar-proot proot/build-rootfs.sh proot/rootfs-overlay/usr/local/bin/goar-serve
 	python3 -m unittest discover -s tests -v
+
+proot-build:
+	./goar-proot build
+
+proot-app:
+	./goar-proot app
+
+proot-serve:
+	./goar-proot serve
+
+proot-stop:
+	./goar-proot stop
+
+proot-status:
+	./goar-proot status
+
+proot-shell:
+	./goar-proot shell
 
 check:
 	$(COMPOSE) config --quiet

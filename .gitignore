@@ -56,3 +56,12 @@ Thumbs.db
 workspace/*
 !workspace/.gitkeep
 goar-state/
+
+# GOAR Alpine PRoot generated runtime
+proot/rootfs/
+proot/.cache/
+proot/state/
+proot/workspace/*
+!proot/workspace/.gitkeep
+proot/goar.env
+proot/goar-alpine-*.tar.gz
