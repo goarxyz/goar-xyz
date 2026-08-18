@@ -33,7 +33,7 @@ if [[ "$GOAR_HOST" != "127.0.0.1" && "$GOAR_HOST" != "::1" && -z "${GOAR_REQUIRE
 fi
 
 cd /opt/goar
-exec /opt/goar/.venv/bin/gunicorn \
+exec /opt/goar/.venv/bin/python -m gunicorn \
   --chdir /opt/goar \
   --bind "${GOAR_HOST}:${GOAR_PORT}" \
   --workers 1 \

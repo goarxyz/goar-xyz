@@ -65,3 +65,9 @@ proot/workspace/*
 !proot/workspace/.gitkeep
 proot/goar.env
 proot/goar-alpine-*.tar.gz
+
+# Android local build products and SDK configuration
+android/.gradle/
+android/local.properties
+android/app/build/
+android/.idea/

@@ -1,0 +1,33 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.goar.os'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.goar.os'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0'
+        buildConfigField 'String', 'DEFAULT_MANIFEST_URL', '"https://github.com/goarxyz/goar-xyz/releases/download/goar-android-v1/goar-rootfs-arm64-v8a.json"'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging true
+        }
+        resources {
+            excludes += ['/META-INF/{AL2.0,LGPL2.1}']
+        }
+    }
+}

@@ -17,3 +17,11 @@ The PRoot project’s historical `proot-static-build` releases page is archived 
 [2] [Alpine noVNC package listing](https://pkgs.alpinelinux.org/package/v3.21/community/x86/novnc)
 
 [3] [PRoot project](https://proot-me.github.io/)
+
+## Android embedded-runtime findings
+
+PRoot documents that it provides user-space `chroot` and bind-mount behavior using unprivileged `ptrace`, operates against the host kernel, and can execute a command against a supplied guest rootfs. Its bind mappings can relocate guest paths to selected host locations. This supports an APK architecture that unpacks an ABI-matched Alpine rootfs into the app-private files directory and launches it through an app-private PRoot executable, rather than replacing the GOAR backend with a thin remote client. Source: [PRoot documentation](https://proot-me.github.io/).
+
+Android's `ProcessBuilder` documentation specifies that an app can launch an operating-system program with an explicit argument list, environment map, working directory, and redirected standard output/error. This supports a native Android service controller that starts the app-private PRoot executable, provides GOAR runtime paths as arguments and environment variables, and captures backend logs inside app-private storage. Source: [Android ProcessBuilder reference](https://developer.android.com/reference/java/lang/ProcessBuilder).
+
+The Termux `proot-distro` project documents rootless Linux userlands on Android using PRoot and a local rootfs archive, demonstrating the underlying model is compatible with Android when the guest rootfs matches the device CPU architecture. The final APK must therefore include separate ABI assets, at minimum `arm64-v8a` for modern Android devices, rather than the existing x86_64 sandbox artifact. Source: [Termux proot-distro](https://github.com/termux/proot-distro).
