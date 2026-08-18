@@ -69,5 +69,7 @@ proot/goar-alpine-*.tar.gz
 # Android local build products and SDK configuration
 android/.gradle/
 android/local.properties
+android/release-signing.properties
+android/*.jks
 android/app/build/
 android/.idea/

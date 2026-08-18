@@ -1,6 +1,18 @@
+import java.util.Properties
+
 plugins {
     id 'com.android.application'
 }
+
+// Keep signing credentials out of source control. See android/README.md for
+// the release-signing.properties format used by reproducible release builds.
+def releaseSigningProperties = new Properties()
+def releaseSigningPropertiesFile = rootProject.file('release-signing.properties')
+if (releaseSigningPropertiesFile.isFile()) {
+    releaseSigningPropertiesFile.withInputStream { releaseSigningProperties.load(it) }
+}
+def hasReleaseSigning = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+        .every { releaseSigningProperties.getProperty(it) }
 
 android {
     namespace 'com.goar.os'
@@ -11,7 +23,7 @@ android {
         minSdk 26
         targetSdk 35
         versionCode 1
-        versionName '0.1.0'
+        versionName '1.0.0'
         buildConfigField 'String', 'DEFAULT_MANIFEST_URL', '"https://github.com/goarxyz/goar-xyz/releases/download/goar-android-v1/goar-rootfs-arm64-v8a.json"'
         ndk {
             abiFilters 'arm64-v8a'
@@ -20,6 +32,31 @@ android {
 
     buildFeatures {
         buildConfig true
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseSigningProperties.getProperty('storeFile'))
+                storePassword releaseSigningProperties.getProperty('storePassword')
+                keyAlias releaseSigningProperties.getProperty('keyAlias')
+                keyPassword releaseSigningProperties.getProperty('keyPassword')
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            debuggable false
+            minifyEnabled false
+            shrinkResources false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
     }
 
     packaging {
