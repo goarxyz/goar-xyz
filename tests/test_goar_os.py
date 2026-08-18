@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -86,6 +87,35 @@ class GoarOsIsolationTests(unittest.TestCase):
 
     def test_runtime_does_not_auto_install_desktop_dependencies_by_default(self) -> None:
         self.assertEqual(self.goar.VNC_DESKTOP._bootstrap_binaries(), {"skipped": "GOAR_AUTO_INSTALL_DESKTOP disabled"})
+
+    def test_operator_profiles_enforce_tool_policy(self) -> None:
+        self.assertTrue(self.goar.operator_profile_allows_tool("operator", "bash")[0])
+        self.assertTrue(self.goar.operator_profile_allows_tool("plan", "read_file")[0])
+        allowed, denial = self.goar.operator_profile_allows_tool("plan", "write_file")
+        self.assertFalse(allowed)
+        self.assertIn("PROFILE POLICY DENIED", denial)
+        self.assertTrue(self.goar.operator_profile_allows_tool("accept-edits", "write_file")[0])
+        self.assertFalse(self.goar.operator_profile_allows_tool("accept-edits", "bash")[0])
+        self.assertFalse(self.goar.operator_profile_allows_tool("explore", "web_fetch")[0])
+
+    def test_operator_profile_api_persists_per_session(self) -> None:
+        agent = SimpleNamespace(
+            _operator_profile="operator",
+            _session_id="profile_api_test",
+            _history=[],
+            _session_tokens=0,
+            model="test-model",
+        )
+        with patch.object(self.goar, "get_or_create_agent", return_value=agent):
+            changed = self.client.post("/v1/operator/profile", json={"profile": "plan", "session_id": "profile_api_test"})
+            self.assertEqual(changed.status_code, 200)
+            self.assertEqual(changed.get_json()["profile"]["id"], "plan")
+            inspected = self.client.get("/v1/operator/profile?session_id=profile_api_test")
+            self.assertEqual(inspected.status_code, 200)
+        self.assertEqual(inspected.get_json()["profile"]["id"], "plan")
+        stored = self.goar.SESSION_STORE.load("profile_api_test")
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored["profile"], "plan")
 
 
 if __name__ == "__main__":

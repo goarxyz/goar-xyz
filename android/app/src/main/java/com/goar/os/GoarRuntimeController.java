@@ -304,21 +304,49 @@ public final class GoarRuntimeController {
         byte[] header = new byte[512];
         try (InputStream file = new BufferedInputStream(new FileInputStream(archive));
              GZIPInputStream gzip = new GZIPInputStream(file)) {
+            String pendingLongName = null;
+            String pendingLongLink = null;
             while (true) {
                 readFully(gzip, header, 0, header.length);
                 consumed += header.length;
                 if (allZero(header)) {
                     break;
                 }
-                String name = tarString(header, 0, 100);
+                String headerName = tarString(header, 0, 100);
                 String prefix = tarString(header, 345, 155);
                 if (!prefix.isEmpty()) {
-                    name = prefix + "/" + name;
+                    headerName = prefix + "/" + headerName;
                 }
-                File output = safeTarFile(destination, name);
                 long size = tarNumber(header, 124, 12);
                 int mode = (int) tarNumber(header, 100, 8);
                 byte type = header[156];
+
+                // GNU tar writes an L/K metadata record before any path or link
+                // target longer than the fixed USTAR header fields. The prior
+                // implementation skipped this record, then extracted the next
+                // file using its truncated path, which collided with directories
+                // such as Python __pycache__ in the full Alpine rootfs.
+                if (type == 'L' || type == 'K') {
+                    String extendedValue = readTarText(gzip, size);
+                    consumed += size;
+                    long padding = (512 - (size % 512)) % 512;
+                    if (padding > 0) {
+                        skipExactly(gzip, padding);
+                        consumed += padding;
+                    }
+                    if (type == 'L') {
+                        pendingLongName = extendedValue;
+                    } else {
+                        pendingLongLink = extendedValue;
+                    }
+                    continue;
+                }
+
+                String name = pendingLongName == null ? headerName : pendingLongName;
+                String linkTarget = pendingLongLink == null ? tarString(header, 157, 100) : pendingLongLink;
+                pendingLongName = null;
+                pendingLongLink = null;
+                File output = safeTarFile(destination, name);
                 if (type == '5') {
                     if (!output.isDirectory() && !output.mkdirs()) {
                         throw new IOException("Could not create directory " + name);
@@ -328,12 +356,11 @@ public final class GoarRuntimeController {
                     if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
                         throw new IOException("Could not create parent for " + name);
                     }
-                    String target = tarString(header, 157, 100);
-                    validateSymbolicLinkTarget(destination, output, target);
+                    validateSymbolicLinkTarget(destination, output, linkTarget);
                     Files.deleteIfExists(output.toPath());
-                    Files.createSymbolicLink(output.toPath(), java.nio.file.Paths.get(target));
+                    Files.createSymbolicLink(output.toPath(), java.nio.file.Paths.get(linkTarget));
                 } else if (type == '1') {
-                    File target = safeTarFile(destination, tarString(header, 157, 100));
+                    File target = safeTarFile(destination, linkTarget);
                     File parent = output.getParentFile();
                     if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
                         throw new IOException("Could not create parent for " + name);
@@ -373,6 +400,19 @@ public final class GoarRuntimeController {
             }
             read += amount;
         }
+    }
+
+    private static String readTarText(InputStream input, long length) throws IOException {
+        if (length < 0 || length > 1024 * 1024) {
+            throw new IOException("Unexpectedly large tar extended-path record");
+        }
+        byte[] value = new byte[(int) length];
+        readFully(input, value, 0, value.length);
+        int end = value.length;
+        while (end > 0 && (value[end - 1] == 0 || value[end - 1] == '\n')) {
+            end--;
+        }
+        return new String(value, 0, end, StandardCharsets.UTF_8);
     }
 
     private static void copyExactly(InputStream input, BufferedOutputStream output, long length) throws IOException {

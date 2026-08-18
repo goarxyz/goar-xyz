@@ -1024,6 +1024,7 @@ class SessionStore:
                 "history_len": len(hist),
                 "tokens": data.get("tokens") or 0,
                 "model": data.get("model"),
+                "profile": normalize_operator_profile(data.get("profile") or "operator"),
                 "preview": preview,
             }
             cache[key] = (st.st_mtime, st.st_size, row)
@@ -1052,6 +1053,7 @@ class SessionStore:
         title: str = "",
         model: str = "",
         tokens: int = 0,
+        profile: str = "operator",
         ui_messages: list[dict[str, Any]] | None = None,
         merge: bool = True,
     ) -> Path:
@@ -1080,6 +1082,7 @@ class SessionStore:
                 "title": title_final,
                 "model": model or existing.get("model") or "",
                 "tokens": int(tokens or existing.get("tokens") or 0),
+                "profile": normalize_operator_profile(profile or existing.get("profile") or "operator"),
                 "created": created,
                 "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "updated_ts": time.time(),
@@ -1202,6 +1205,7 @@ def bind_agent_session(agent: Any, session_id: str | None, *, model: str | None 
                     list(getattr(agent, "_history", []) or []),
                     model=str(getattr(agent, "model", "") or getattr(agent, "_model", "") or ""),
                     tokens=int(getattr(agent, "_session_tokens", 0) or 0),
+                    profile=str(getattr(agent, "_operator_profile", "operator") or "operator"),
                 )
             except Exception as exc:
                 logger.warning(f"autosave prev session {prev}: {exc}")
@@ -1210,11 +1214,13 @@ def bind_agent_session(agent: Any, session_id: str | None, *, model: str | None 
             if data:
                 agent._history = list(data.get("history") or [])
                 agent._session_tokens = int(data.get("tokens") or 0)
+                agent._operator_profile = normalize_operator_profile(data.get("profile") or "operator")
             else:
                 
                 agent._history = []
                 agent._session_tokens = 0
-                SESSION_STORE.save(sid, [], title="New chat", model=str(model or getattr(agent, "model", "") or ""), ui_messages=[])
+                agent._operator_profile = "operator"
+                SESSION_STORE.save(sid, [], title="New chat", model=str(model or getattr(agent, "model", "") or ""), profile="operator", ui_messages=[])
         agent._session_id = sid
         if model:
             try:
@@ -1234,6 +1240,7 @@ def autosave_agent_session(agent: Any, ui_messages: list[dict[str, Any]] | None 
         title=title,
         model=str(getattr(agent, "model", "") or getattr(agent, "_model", "") or ""),
         tokens=int(getattr(agent, "_session_tokens", 0) or 0),
+        profile=str(getattr(agent, "_operator_profile", "operator") or "operator"),
         ui_messages=ui_messages,
     )
     return sid
@@ -1663,6 +1670,94 @@ SESSION_TOKEN_BUDGET = int(os.getenv("GOAR_MAX_TOKENS", os.getenv("GOAR_SESSION_
 SESSION_COMPACT_KEEP_RECENT = int(os.getenv("GOAR_COMPACT_KEEP", "8"))  
 
 AUTO_APPROVE           = True  
+
+# Vibe-inspired operator profiles. These are enforced in the tool dispatcher,
+# not merely described in a prompt, and the default preserves GOAR's existing
+# full-operator behavior.
+_PROFILE_READ_TOOLS = frozenset({
+    "read_file", "list_dir", "grep", "web_search", "web_fetch", "web_browse",
+    "computer_read", "computer_snapshot", "list_tools", "get_tool_guidance",
+    "list_skills", "todo_list", "subagent_status",
+})
+_PROFILE_EDIT_TOOLS = _PROFILE_READ_TOOLS | frozenset({
+    "write_file", "search_replace", "todo_add", "todo_done", "skill",
+    "git_checkpoint", "git_rollback", "undo_last_edit", "compact_history",
+    "rewind_session",
+})
+OPERATOR_PROFILE_SPECS: dict[str, dict[str, Any]] = {
+    "operator": {
+        "display_name": "Operator",
+        "description": "Full GOAR operator with the complete local tool set.",
+        "auto_approve": True,
+        "allowed_tools": None,
+    },
+    "plan": {
+        "display_name": "Plan",
+        "description": "Read-only exploration and planning; execution tools are blocked.",
+        "auto_approve": False,
+        "allowed_tools": _PROFILE_READ_TOOLS,
+    },
+    "accept-edits": {
+        "display_name": "Accept Edits",
+        "description": "Workspace inspection and edits only; shell, browser control, network side effects, secrets, and jobs are blocked.",
+        "auto_approve": False,
+        "allowed_tools": _PROFILE_EDIT_TOOLS,
+    },
+    "explore": {
+        "display_name": "Explore",
+        "description": "Minimal read-only profile for focused investigation.",
+        "auto_approve": False,
+        "allowed_tools": frozenset({"read_file", "list_dir", "grep", "list_tools", "get_tool_guidance", "list_skills", "skill"}),
+    },
+}
+
+
+def normalize_operator_profile(value: Any, *, strict: bool = False) -> str:
+    profile = str(value or "operator").strip().lower()
+    if profile in OPERATOR_PROFILE_SPECS:
+        return profile
+    if strict:
+        choices = ", ".join(sorted(OPERATOR_PROFILE_SPECS))
+        raise ValueError(f"Unknown operator profile {profile!r}. Choose one of: {choices}")
+    return "operator"
+
+
+def operator_profile_info(value: Any) -> dict[str, Any]:
+    profile = normalize_operator_profile(value)
+    spec = OPERATOR_PROFILE_SPECS[profile]
+    allowed = spec["allowed_tools"]
+    return {
+        "id": profile,
+        "display_name": spec["display_name"],
+        "description": spec["description"],
+        "auto_approve": bool(spec["auto_approve"]),
+        "allowed_tools": None if allowed is None else sorted(allowed),
+    }
+
+
+def operator_profile_allows_tool(profile_value: Any, tool_name: str) -> tuple[bool, str]:
+    profile = normalize_operator_profile(profile_value)
+    allowed = OPERATOR_PROFILE_SPECS[profile]["allowed_tools"]
+    if allowed is None or tool_name in allowed:
+        return True, ""
+    return False, (
+        f"[PROFILE POLICY DENIED] The active {profile!r} profile blocks tool {tool_name!r}. "
+        "Switch to the operator profile through /v1/operator/profile if this action is intended."
+    )
+
+
+def operator_profile_prompt(value: Any) -> str:
+    info = operator_profile_info(value)
+    if info["id"] == "operator":
+        return "\n\n## Operating Profile\nActive profile: **Operator**. Full local GOAR tools are available for autonomous end-to-end work."
+    allowed = ", ".join(info["allowed_tools"])
+    return (
+        "\n\n## Operating Profile\n"
+        f"Active profile: **{info['display_name']}**. {info['description']}\n"
+        f"Only these tools are permitted: {allowed}. Do not attempt blocked tools; provide a plan or request that the Operator profile be selected."
+    )
+
+
 MAX_AGENT_TURNS        = int(os.getenv("GOAR_MAX_TURNS", "500"))  
 MAX_TOOL_TIMEOUT       = float(os.getenv("GOAR_TOOL_TIMEOUT", "180"))
 MAX_SUBAGENT_TIMEOUT   = float(os.getenv("GOAR_SUBAGENT_TIMEOUT", "900"))
@@ -9112,7 +9207,8 @@ class TriAgentLoop:
         )
 
         self._session_tokens: int = 0
-        self._session_tool_calls: int = 0  
+        self._session_tool_calls: int = 0
+        self._operator_profile: str = "operator"
         self._recent_assistant_texts: list[str] = []
         self._stagnation_counter: int = 0
         
@@ -9189,6 +9285,7 @@ class TriAgentLoop:
             "Use relative paths with file tools so files stay in this workspace; use absolute paths only when explicitly requested."
         )
         base += "\n\nTools: use official tools[] (core set). list_tools for full catalog."
+        base += operator_profile_prompt(getattr(self, "_operator_profile", "operator"))
         memory_context = ""
         if self._history:
             last_user_msg = ""
@@ -9240,7 +9337,8 @@ class TriAgentLoop:
             "(VNC + CDP when available). Both sides can navigate/click/type. Prefer computer_* over guessing UI state.\n"
             f"\n## MCP Connectors\n{mcp_line}. Use mcp_status / mcp_add / mcp_call.\n"
             "\n## Subagents\nUse spawn_agent for parallel work; poll subagent_status.\n"
-            "\n## Sessions\nHistory auto-compacts. /compact, /rewind N, /resume, /sessions. Auto-approve is ON.\n"
+            "\n## Sessions\nHistory auto-compacts. /compact, /rewind N, /resume, /sessions. "
+            f"Active profile: {operator_profile_info(getattr(self, '_operator_profile', 'operator'))['display_name']}.\n"
         )
 
         return base
@@ -9408,7 +9506,10 @@ class TriAgentLoop:
         auto_approve: bool = True,
     ) -> None:
         
-        auto_approve = True if AUTO_APPROVE else bool(auto_approve)
+        profile_info = operator_profile_info(getattr(self, "_operator_profile", "operator"))
+        # Operator mode preserves legacy unattended GOAR behavior. Restricted
+        # profiles never inherit the global auto-approve setting.
+        auto_approve = bool(profile_info["auto_approve"]) and (True if AUTO_APPROVE else bool(auto_approve))
         
         
         
@@ -9926,7 +10027,12 @@ class TriAgentLoop:
                 async def exec_one(
                     name: str, args: dict[str, Any], call_id: str
                 ) -> tuple[str, str, str]:
-                    if name == "set_model":
+                    allowed, denial = operator_profile_allows_tool(
+                        getattr(self, "_operator_profile", "operator"), name
+                    )
+                    if not allowed:
+                        result = denial
+                    elif name == "set_model":
                         result = self._executor._set_model(args)
                         await on_event(ModelSwitchedEvent(args.get("model", "")))
                         return name, result, call_id
@@ -16724,6 +16830,48 @@ def create_flask_app() -> "Flask":
                 _AGENT_SINGLETON._recent_assistant_texts = []
                 _AGENT_SINGLETON._stagnation_counter = 0
             return jsonify({"ok": True, "message": "Session history cleared"})
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.get("/v1/operator/profile")
+    def operator_profile_get():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        requested_session = str(request.args.get("session_id") or "").strip()
+        try:
+            agent = get_or_create_agent(None)
+            # Profile calls may arrive outside a chat completion request, so bind
+            # the durable last session explicitly instead of inspecting a fresh
+            # in-memory agent with only its constructor defaults.
+            bind_agent_session(agent, requested_session or "last")
+            profile = operator_profile_info(getattr(agent, "_operator_profile", "operator"))
+            return jsonify({
+                "ok": True,
+                "session_id": getattr(agent, "_session_id", None),
+                "profile": profile,
+                "available_profiles": [operator_profile_info(name) for name in sorted(OPERATOR_PROFILE_SPECS)],
+            })
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+    @app.post("/v1/operator/profile")
+    def operator_profile_set():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        body = request.get_json(force=True, silent=True) or {}
+        try:
+            profile_name = normalize_operator_profile(body.get("profile"), strict=True)
+            agent = get_or_create_agent(None)
+            requested_session = str(body.get("session_id") or "").strip()
+            bind_agent_session(agent, requested_session or "last")
+            agent._operator_profile = profile_name
+            session_id = autosave_agent_session(agent)
+            profile = operator_profile_info(profile_name)
+            return jsonify({"ok": True, "session_id": session_id, "profile": profile})
+        except ValueError as exc:
+            return jsonify({"error": str(exc), "available_profiles": sorted(OPERATOR_PROFILE_SPECS)}), 400
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
