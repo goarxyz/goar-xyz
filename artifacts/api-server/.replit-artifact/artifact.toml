@@ -1,4 +1,4 @@
-kind = "api"
+kind = "web"
 previewPath = "/"
 title = "GOAR"
 version = "1.0.0"
