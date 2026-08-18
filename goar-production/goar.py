@@ -4,6 +4,7 @@ import argparse
 import ast
 import asyncio
 import functools
+import hmac
 import importlib.util
 import json
 import logging
@@ -1342,7 +1343,6 @@ MODEL = _env_first("FREEAI_MODEL", "GOAR_MODEL", "OPENAI_MODEL", "LLM_MODEL", de
 MODEL_EXPLICIT = _env_first("FREEAI_MODEL", "GOAR_MODEL", "OPENAI_MODEL", "LLM_MODEL", default="")
 
 
-BRAND_IMAGE_URL = os.getenv("GOAR_BRAND_URL", "https://i.ibb.co/LXhfp4Jy/download.png")
 TEMPERATURE = float(os.getenv("GOAR_TEMPERATURE", "0.2"))
 MAX_TOKENS = int(os.getenv("GOAR_MAX_TOKENS", "4096"))
 
@@ -8015,7 +8015,7 @@ class ToolExecutor:
         description = args.get("description", "")
         frontend = args.get("frontend", "react")
         backend = args.get("backend", "fastapi")
-        project_dir = Path.cwd() / name
+        project_dir = WORKSPACE_ROOT / name
         if project_dir.exists():
             return f"Project directory already exists: {project_dir}"
         project_dir.mkdir(parents=True, exist_ok=True)
@@ -8149,8 +8149,8 @@ class ToolExecutor:
 
     def _add_route(self, args: dict[str, Any]) -> str:
         project_dir = Path(args["project_dir"]).expanduser().resolve()
-        if not _is_subpath(project_dir, Path.cwd().resolve()):
-            return "[ACCESS DENIED] project_dir must be under the current working directory."
+        if not _is_subpath(project_dir, WORKSPACE_ROOT):
+            return "[ACCESS DENIED] project_dir must be under the GOAR workspace."
         path = args["path"]
         method = args["method"]
         handler_code = args["handler_code"]
@@ -8172,8 +8172,8 @@ class ToolExecutor:
 
     def _add_component(self, args: dict[str, Any]) -> str:
         project_dir = Path(args["project_dir"]).expanduser().resolve()
-        if not _is_subpath(project_dir, Path.cwd().resolve()):
-            return "[ACCESS DENIED] project_dir must be under the current working directory."
+        if not _is_subpath(project_dir, WORKSPACE_ROOT):
+            return "[ACCESS DENIED] project_dir must be under the GOAR workspace."
         component_name = args["component_name"]
         component_code = args["component_code"]
         src_dir = project_dir / "frontend" / "src"
@@ -13822,7 +13822,7 @@ def _check_auth() -> tuple[bool, str | None]:
     if not required:
         return True, None
     key = request.headers.get("X-API-Key", "") or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if key == required:
+    if hmac.compare_digest(key, required):
         return True, None
     return False, "Invalid or missing API key"
 
@@ -14264,7 +14264,7 @@ class VncDesktopStack:
         the still-missing binary in `self.error` as before.
         """
         results: dict[str, Any] = {"xvnc": None, "chromium": None, "novnc": None}
-        if os.getenv("GOAR_AUTO_INSTALL_DESKTOP", "1").strip().lower() not in ("1", "true", "yes", "on"):
+        if os.getenv("GOAR_AUTO_INSTALL_DESKTOP", "0").strip().lower() not in ("1", "true", "yes", "on"):
             return {"skipped": "GOAR_AUTO_INSTALL_DESKTOP disabled"}
         import subprocess as sp
 
@@ -15374,7 +15374,9 @@ def create_flask_app() -> "Flask":
         raise RuntimeError("Flask is not installed. Run: pip install flask flask-cors")
 
     app = Flask(__name__)
-    CORS(app, resources={r"/*": {"origins": "*"}})
+    cors_origins = [origin.strip() for origin in os.getenv("GOAR_CORS_ORIGINS", "").split(",") if origin.strip()]
+    if cors_origins:
+        CORS(app, resources={r"/v1/*": {"origins": cors_origins}})
 
     
     _vnc_sock = Sock(app) if Sock is not None else None
@@ -15506,20 +15508,25 @@ def create_flask_app() -> "Flask":
     def index():
         return Response(GOAR_HTML, mimetype="text/html; charset=utf-8")
 
+    def _brand_asset():
+        response = Response(
+            (PROJECT_ROOT / "static" / "brand.svg").read_bytes(),
+            mimetype="image/svg+xml",
+        )
+        response.cache_control.max_age = 86_400
+        return response
+
     @app.get("/brand/logo.png")
     def brand_logo():
-        from flask import redirect as _redir
-        return _redir(BRAND_IMAGE_URL, code=302)
+        return _brand_asset()
 
     @app.get("/brand/mark.png")
     def brand_mark():
-        from flask import redirect as _redir
-        return _redir(BRAND_IMAGE_URL, code=302)
+        return _brand_asset()
 
     @app.get("/brand/favicon.png")
     def brand_favicon():
-        from flask import redirect as _redir
-        return _redir(BRAND_IMAGE_URL, code=302)
+        return _brand_asset()
 
     @app.get("/health")
     def health():
@@ -15660,11 +15667,7 @@ def create_flask_app() -> "Flask":
         if not ok:
             return jsonify({"error": err}), 401
         
-        roots = [PROJECT_ROOT if "PROJECT_ROOT" in globals() else Path.cwd()]
-        try:
-            roots = [Path(PROJECT_ROOT).resolve()]
-        except Exception:
-            roots = [Path.cwd().resolve()]
+        roots = [WORKSPACE_ROOT]
         files: list[dict[str, Any]] = []
         skip_dirs = {
             ".git", "node_modules", "__pycache__", ".GOAR", "screenshots",
@@ -15724,16 +15727,15 @@ def create_flask_app() -> "Flask":
         if not rel or ".." in rel.split("/"):
             return jsonify({"error": "invalid path"}), 400
         
-        cwd_root = Path.cwd().resolve()
-        cfg_root = Path(CONFIG_DIR).resolve()
-        candidates = [Path.cwd() / rel, Path.cwd() / "uploads" / Path(rel).name, CONFIG_DIR / rel]
+        workspace_root = WORKSPACE_ROOT.resolve()
+        candidates = [WORKSPACE_ROOT / rel, WORKSPACE_ROOT / "uploads" / Path(rel).name]
         for p in candidates:
             try:
                 p = p.resolve()
                 
                 
                 allowed_root = None
-                for root in (cwd_root, cfg_root):
+                for root in (workspace_root,):
                     try:
                         p.relative_to(root)
                         allowed_root = root
@@ -15765,10 +15767,10 @@ def create_flask_app() -> "Flask":
         
         if "/" not in rel:
             rel = "uploads/" + rel
-        p = (Path.cwd() / rel).resolve()
+        p = (WORKSPACE_ROOT / rel).resolve()
         
         try:
-            p.relative_to(Path.cwd().resolve())
+            p.relative_to(WORKSPACE_ROOT)
         except ValueError:
             return jsonify({"error": "path escapes workspace"}), 400
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -15780,7 +15782,7 @@ def create_flask_app() -> "Flask":
         ok, err = _check_auth()
         if not ok:
             return jsonify({"error": err}), 401
-        up = Path.cwd() / "uploads"
+        up = WORKSPACE_ROOT / "uploads"
         up.mkdir(parents=True, exist_ok=True)
         saved = []
         files = request.files.getlist("file") if request.files else []
@@ -15800,9 +15802,9 @@ def create_flask_app() -> "Flask":
         rel = (request.args.get("path") or "").strip().lstrip("/")
         if not rel or ".." in rel.split("/"):
             return jsonify({"error": "invalid path"}), 400
-        p = (Path.cwd() / rel).resolve()
+        p = (WORKSPACE_ROOT / rel).resolve()
         try:
-            p.relative_to(Path.cwd().resolve())
+            p.relative_to(WORKSPACE_ROOT)
         except ValueError:
             return jsonify({"error": "path escapes workspace"}), 400
         if not p.exists():

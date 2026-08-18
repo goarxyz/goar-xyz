@@ -1,6 +1,6 @@
 # GOAR production package
 
-This package contains the cleaned GOAR autonomous agent, its dependency-free terminal wrapper, and a production Flask service entry point. The Flask service binds to all interfaces for hosted environments and should be protected with `GOAR_REQUIRE_KEY` when reachable over a network.
+This package contains the GOAR autonomous agent, its terminal wrapper, and a production Flask service entry point. The native launcher now binds to loopback by default; explicitly set `GOAR_HOST` and `GOAR_REQUIRE_KEY` when deploying behind a trusted reverse proxy or on a network. For the self-contained desktop and browser runtime, use the repository-level Docker Compose distribution described in `../README.md`.
 
 ## Installation
 
@@ -19,7 +19,7 @@ sudo chown goar:goar /etc/goar/goar.env
 sudo chmod 600 /etc/goar/goar.env
 ```
 
-The installer also provisions the Chromium browser runtime and the X/VNC/noVNC desktop bridge when the host provides a supported system package manager. Do not place credentials in source files, command-line arguments, service definitions, or logs. Set `GOAR_REQUIRE_KEY` when the service is reachable by any network other than a trusted local reverse proxy.
+The installer provisions the Chromium browser runtime and the X/VNC/noVNC desktop bridge when the host provides a supported system package manager. Do not place credentials in source files, command-line arguments, service definitions, or logs. The default configuration does not install desktop packages at application runtime; enable `GOAR_AUTO_INSTALL_DESKTOP=1` only when intentionally using that best-effort native fallback. Set `GOAR_REQUIRE_KEY` when the service is reachable by any network other than a trusted local reverse proxy.
 
 ## Flask service
 

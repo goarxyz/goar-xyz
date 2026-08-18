@@ -1,0 +1,11 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.py[cod]
+.GOAR
+.env
+*.log
+bundled-libs
+static/novnc/node_modules

@@ -1,0 +1,44 @@
+name: goar-os
+
+services:
+  goar:
+    build:
+      context: ./goar-production
+      dockerfile: Dockerfile
+    image: goar-os:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${GOAR_BIND_ADDRESS:-127.0.0.1}:${GOAR_PORT:-8080}:8080"
+    environment:
+      GOAR_HOST: 0.0.0.0
+      GOAR_PUBLIC_BIND_ADDRESS: "${GOAR_BIND_ADDRESS:-127.0.0.1}"
+      GOAR_PORT: "8080"
+      GOAR_HOME: /data/goar
+      GOAR_WORKSPACE: /workspace
+      GOAR_AUTO_INSTALL_DESKTOP: "0"
+      GOAR_RUN_UID: "${GOAR_UID:-1000}"
+      GOAR_RUN_GID: "${GOAR_GID:-1000}"
+      GOAR_REQUIRE_KEY: "${GOAR_REQUIRE_KEY:-}"
+      GOAR_API_KEY: "${GOAR_API_KEY:-}"
+      GOAR_API_BASE: "${GOAR_API_BASE:-}"
+      GOAR_MODEL: "${GOAR_MODEL:-}"
+      FREEAI_API_KEY: "${FREEAI_API_KEY:-}"
+      FREEAI_API_BASE: "${FREEAI_API_BASE:-}"
+      FREEAI_MODEL: "${FREEAI_MODEL:-}"
+    volumes:
+      - goar-state:/data/goar
+      - ./workspace:/workspace
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+
+volumes:
+  goar-state:
+    name: goar-os-state

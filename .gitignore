@@ -2,6 +2,8 @@
 
 # compiled output
 dist
+__pycache__/
+*.py[cod]
 tmp
 out-tsc
 *.tsbuildinfo
@@ -47,3 +49,10 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# GOAR OS local configuration and durable runtime data
+.env
+.env.local
+workspace/*
+!workspace/.gitkeep
+goar-state/
