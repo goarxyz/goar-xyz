@@ -1,0 +1,12 @@
+.env.example
+MANIFEST.in
+MANIFEST.txt
+README.md
+goar.py
+goar.service
+install.sh
+requirements.txt
+run_cli.sh
+run_flask.sh
+tools/README.md
+wsgi.py

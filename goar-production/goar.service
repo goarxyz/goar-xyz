@@ -1,0 +1,25 @@
+[Unit]
+Description=GOAR Autonomous Agent Flask Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=goar
+Group=goar
+WorkingDirectory=/opt/goar
+EnvironmentFile=-/etc/goar/goar.env
+ExecStart=/opt/goar/.venv/bin/gunicorn --chdir /opt/goar --bind ${GOAR_HOST}:${GOAR_PORT} --workers 1 --threads 8 --timeout 0 --graceful-timeout 30 --keep-alive 5 --access-logfile - --error-logfile - wsgi:application
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/goar /var/log/goar
+
+[Install]
+WantedBy=multi-user.target
