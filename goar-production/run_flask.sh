@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
-: "${GOAR_HOST:=127.0.0.1}"
-: "${GOAR_PORT:=8080}"
+: "${GOAR_HOST:=0.0.0.0}"
+: "${GOAR_PORT:=${PORT:-8080}}"
 if ! command -v gunicorn >/dev/null 2>&1; then
   echo "gunicorn is required for production Flask service execution; install requirements.txt first" >&2
   exit 127

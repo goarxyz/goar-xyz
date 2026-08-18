@@ -1,0 +1,2 @@
+- [GOAR Chromium lib bundling](goar-chromium-libs.md) — find/bundle Playwright libs on NixOS without scanning /nix/store (721k entries)
+- [GOAR Replit workflow env](goar-replit-env.md) — Replit auto-injects LD_LIBRARY_PATH; nix package libs found via PATH parsing

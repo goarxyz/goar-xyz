@@ -1,32 +1,48 @@
 kind = "api"
-previewPath = "/api" # TODO - should be excluded from preview in the first place
-title = "API Server"
+previewPath = "/"
+title = "GOAR"
 version = "1.0.0"
 id = "3B4_FFSkEVBkAeYMFRJ2e"
 
 [[services]]
 localPort = 8080
-name = "API Server"
-paths = ["/api"]
+name = "GOAR Flask Server"
+paths = ["/"]
+
+[services.env]
+PORT = "8080"
+BASE_PATH = "/"
+GOAR_HOST = "0.0.0.0"
+GOAR_PORT = "8080"
+GOAR_HOME = "/home/runner/.goar"
+GOAR_WORKSPACE = "/home/runner/.goar/workspace"
+GOAR_AUTO_INSTALL_DESKTOP = "1"
+PYTHONUNBUFFERED = "1"
 
 [services.development]
-run = "pnpm --filter @workspace/api-server run dev"
+run = "bash run-goar.sh"
 
 [services.production]
 
 [services.production.build]
-args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
+args = ["bash", "artifacts/api-server/build-goar.sh"]
 
 [services.production.build.env]
-NODE_ENV = "production"
+GOAR_AUTO_INSTALL_DESKTOP = "1"
+PYTHONUNBUFFERED = "1"
 
 [services.production.run]
-# we don't run through pnpm to make startup faster in production
-args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+args = ["bash", "artifacts/api-server/run-goar.sh"]
 
 [services.production.run.env]
 PORT = "8080"
-NODE_ENV = "production"
+BASE_PATH = "/"
+GOAR_HOST = "0.0.0.0"
+GOAR_PORT = "8080"
+GOAR_HOME = "/home/runner/.goar"
+GOAR_WORKSPACE = "/home/runner/.goar/workspace"
+GOAR_AUTO_INSTALL_DESKTOP = "1"
+PYTHONUNBUFFERED = "1"
 
 [services.production.health.startup]
-path = "/api/healthz"
+path = "/health"

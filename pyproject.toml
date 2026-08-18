@@ -11,4 +11,5 @@ dependencies = [
     "httpx[socks]>=0.28,<1",
     "openai>=2.52,<3",
     "playwright>=1.50,<2",
+    "websockify>=0.12,<1",
 ]

@@ -2,7 +2,7 @@ modules = ["nodejs-24", "python-base-3.13"]
 
 [deployment]
 router = "application"
-deploymentTarget = "autoscale"
+deploymentTarget = "vm"
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
@@ -21,4 +21,23 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
-packages = ["gitFull", "playwright-driver"]
+packages = [
+  # Desktop / VNC / noVNC
+  "fluxbox", "novnc", "tigervnc", "x11vnc", "xorg.xorgserver", "xterm",
+  # Playwright Chromium headless runtime – all required shared libraries
+  "playwright-driver",
+  "atk", "at-spi2-atk", "at-spi2-core",
+  "cairo", "pango", "harfbuzz", "fontconfig", "freetype",
+  "gdk-pixbuf", "gtk3",
+  "cups", "dbus",
+  "alsa-lib",
+  "mesa",
+  "libxkbcommon",
+  "nspr", "nss",
+  "xorg.libX11", "xorg.libXcomposite", "xorg.libXcursor",
+  "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes",
+  "xorg.libXi", "xorg.libXrandr", "xorg.libXrender",
+  "xorg.libXtst", "xorg.libxcb",
+  # Utilities
+  "gitFull"
+]

@@ -14197,6 +14197,8 @@ class VncDesktopStack:
         self.chrome_bin = self._find_glob([
             "/opt/pw-browsers/chromium-1234/chrome-linux64/chrome",
             "/opt/pw-browsers/chromium-*/chrome-linux64/chrome",
+            os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome"),
+            str(Path(__file__).resolve().parent.parent / ".cache/ms-playwright/chromium-*/chrome-linux64/chrome"),
             "/usr/bin/chromium",
             "/usr/bin/chromium-browser",
             "/usr/bin/google-chrome",
@@ -14312,6 +14314,8 @@ class VncDesktopStack:
             self.chrome_bin = self._find_glob([
                 "/opt/pw-browsers/chromium-1234/chrome-linux64/chrome",
                 "/opt/pw-browsers/chromium-*/chrome-linux64/chrome",
+                os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome"),
+                str(Path(__file__).resolve().parent.parent / ".cache/ms-playwright/chromium-*/chrome-linux64/chrome"),
                 "/usr/bin/chromium",
                 "/usr/bin/chromium-browser",
                 "/usr/bin/google-chrome",
