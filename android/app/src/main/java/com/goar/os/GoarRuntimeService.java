@@ -21,6 +21,7 @@ public final class GoarRuntimeService extends Service {
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private GoarRuntimeController runtime;
+    private Process loopDaemon;
 
     @Override
     public void onCreate() {
@@ -33,6 +34,7 @@ public final class GoarRuntimeService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
+            stopLoopDaemon();
             emit("stopped", 0, "GOAR terminal service has stopped");
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
@@ -55,11 +57,36 @@ public final class GoarRuntimeService extends Service {
             if (!runtime.isInstalled()) {
                 throw new IllegalStateException("Kali terminal rootfs is not installed");
             }
-            emit("running", 100, "Kali terminal is ready. Open Workspace to begin.");
+            ensureLoopDaemon();
+            emit("running", 100, "Kali terminal and durable GOAR loops are active. Open Workspace to begin.");
         } catch (Exception error) {
             emit("error", 0, error.getMessage() == null ? error.toString() : error.getMessage());
             stopForeground(STOP_FOREGROUND_DETACH);
         }
+    }
+
+    private synchronized void ensureLoopDaemon() throws Exception {
+        if (loopDaemon != null && loopDaemon.isAlive()) {
+            return;
+        }
+        stopLoopDaemon();
+        loopDaemon = runtime.startDurableLoopDaemon();
+    }
+
+    private synchronized void stopLoopDaemon() {
+        if (loopDaemon == null) {
+            return;
+        }
+        loopDaemon.destroy();
+        try {
+            Thread.sleep(500);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+        if (loopDaemon.isAlive()) {
+            loopDaemon.destroyForcibly();
+        }
+        loopDaemon = null;
     }
 
     private void emit(String stage, int percent, String detail) {
@@ -98,6 +125,7 @@ public final class GoarRuntimeService extends Service {
 
     @Override
     public void onDestroy() {
+        stopLoopDaemon();
         executor.shutdownNow();
         super.onDestroy();
     }

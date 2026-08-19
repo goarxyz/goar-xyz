@@ -26,6 +26,14 @@ KALI_ROOTFS = REPO_ROOT / "proot" / "goar-kali-terminal-arm64.tar.gz"
 PTY_BRIDGE_SOURCE = REPO_ROOT / "android" / "app" / "src" / "main" / "cpp" / "goar_terminal_jni.c"
 PTY_BRIDGE_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarPtyBridge.java"
 TERMINAL_VIEW_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarTerminalView.java"
+RUNTIME_SERVICE_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarRuntimeService.java"
+MANIFEST_XML = REPO_ROOT / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
+LOOP_DAEMON_SOURCE = REPO_ROOT / "proot" / "kali-terminal-overlay" / "opt" / "goar-terminal" / "goar_loopd.py"
+WORKSPACE_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarWorkspaceActivity.java"
+CONSOLE_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarConsoleActivity.java"
+CONFIG_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarConfigActivity.java"
+PACKAGE_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarPackageActivity.java"
+CONTROL_JAVA = REPO_ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "goar" / "os" / "GoarControlActivity.java"
 KAI_MODEL_ARM64_SHA256 = {
     "libproot.so": "452fcfe761d398e6d1180e60c9b5039fcabdba06d8d73e803c5bb866905d2a8c",
     "libproot-loader.so": "cb5e5b6900e198ca8160e9d355ea5b98d646333887a769411ff74132c1cec5df",
@@ -87,13 +95,18 @@ class AndroidProotBootstrapContractTests(unittest.TestCase):
         for retired in ("waitForHealth", "goar-serve", "127.0.0.1:8080"):
             self.assertNotIn(retired, self.source)
 
+    def test_kali_literal_backslash_filename_is_not_rejected(self) -> None:
+        self.assertNotIn('name.contains("\\\\")', self.source)
+        self.assertIn('name.contains("../")', self.source)
+        self.assertIn("getCanonicalFile", self.source)
+
     def test_manifest_pins_existing_kali_terminal_archive(self) -> None:
         manifest = json.loads(ROOTFS_MANIFEST.read_text(encoding="utf-8"))
         self.assertEqual(manifest["architecture"], "arm64-v8a")
         self.assertTrue(manifest["rootfs_url"].endswith("/goar-kali-terminal-arm64.tar.gz"))
         self.assertRegex(manifest["rootfs_sha256"], r"^[0-9a-f]{64}$")
         self.assertGreater(manifest["rootfs_size"], 0)
-        self.assertEqual(manifest["version"], "kali-terminal-v1.1.0")
+        self.assertEqual(manifest["version"], "kali-terminal-v1.1.1")
         if KALI_ROOTFS.is_file():
             self.assertEqual(manifest["rootfs_size"], KALI_ROOTFS.stat().st_size)
             self.assertEqual(manifest["rootfs_sha256"], hashlib.sha256(KALI_ROOTFS.read_bytes()).hexdigest())
@@ -111,8 +124,47 @@ class AndroidProotBootstrapContractTests(unittest.TestCase):
             "opt/vibehack/.venv/bin/vibehack",
         }
         self.assertTrue(required.issubset(members), sorted(required - members))
+        self.assertIn("etc/systemd/user/app-org.kde.plasma\\x2dwelcome@autostart.service", members)
         forbidden = ("flask", "novnc", "websockify", "chromium")
         self.assertFalse(any(any(term in member.lower() for term in forbidden) for member in members))
+
+    def test_foreground_service_owns_durable_loop_runtime(self) -> None:
+        service = RUNTIME_SERVICE_JAVA.read_text(encoding="utf-8")
+        manifest = MANIFEST_XML.read_text(encoding="utf-8")
+        loopd = LOOP_DAEMON_SOURCE.read_text(encoding="utf-8")
+        self.assertIn("startDurableLoopDaemon", self.source)
+        self.assertIn('environment.put("GOAR_DISABLE_LOOPS", "1")', self.source)
+        self.assertIn("ensureLoopDaemon", service)
+        self.assertIn("START_STICKY", service)
+        self.assertIn('android:stopWithTask="false"', manifest)
+        self.assertIn('GOAR_LOOP_TURN_TIMEOUT", "0"', loopd)
+        self.assertIn("if TURN_TIMEOUT > 0", loopd)
+
+    def test_operator_console_keeps_terminal_and_agent_chat_isolated(self) -> None:
+        workspace = WORKSPACE_JAVA.read_text(encoding="utf-8")
+        console = CONSOLE_JAVA.read_text(encoding="utf-8")
+        manifest = MANIFEST_XML.read_text(encoding="utf-8")
+        self.assertIn("openDirectTerminal", self.source)
+        self.assertIn('command.add("exec /bin/bash -l")', self.source)
+        self.assertIn("MODE_TERMINAL", workspace)
+        self.assertIn("MODE_AGENT", workspace)
+        self.assertIn("runtime.openDirectTerminal", workspace)
+        self.assertIn("runtime.openTerminal", workspace)
+        self.assertIn("Direct Terminal never receives agent", console)
+        for activity in ("GoarConsoleActivity", "GoarControlActivity", "GoarConfigActivity", "GoarPackageActivity"):
+            self.assertIn(activity, manifest)
+
+    def test_native_configuration_and_package_workflows_are_private_and_explicit(self) -> None:
+        config = CONFIG_JAVA.read_text(encoding="utf-8")
+        package = PACKAGE_JAVA.read_text(encoding="utf-8")
+        control = CONTROL_JAVA.read_text(encoding="utf-8")
+        self.assertIn("saveAgentConfiguration", self.source)
+        self.assertIn("home/.vibehack/.env", self.source)
+        self.assertIn("TYPE_TEXT_VARIATION_PASSWORD", config)
+        self.assertIn("CUSTOM PACKAGE NAMES ARE REQUIRED", package)
+        self.assertIn("apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --", package)
+        self.assertIn("goarctl loop list", control)
+        self.assertIn("goarctl events --limit 25", control)
 
     def test_native_pty_bridge_and_terminal_surface_are_present(self) -> None:
         bridge = PTY_BRIDGE_SOURCE.read_text(encoding="utf-8")

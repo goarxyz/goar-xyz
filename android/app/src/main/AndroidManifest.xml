@@ -10,6 +10,8 @@
         android:allowBackup="false"
         android:usesCleartextTraffic="true"
         android:extractNativeLibs="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="GOAR OS"
         android:theme="@style/Theme.Goar">
         <activity
@@ -23,9 +25,22 @@
         <activity
             android:name=".GoarWorkspaceActivity"
             android:exported="false" />
+        <activity
+            android:name=".GoarConsoleActivity"
+            android:exported="false" />
+        <activity
+            android:name=".GoarControlActivity"
+            android:exported="false" />
+        <activity
+            android:name=".GoarConfigActivity"
+            android:exported="false" />
+        <activity
+            android:name=".GoarPackageActivity"
+            android:exported="false" />
         <service
             android:name=".GoarRuntimeService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

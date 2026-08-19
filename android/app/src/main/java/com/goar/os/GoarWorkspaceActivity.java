@@ -30,11 +30,17 @@ public final class GoarWorkspaceActivity extends Activity {
     private GoarTerminalView terminalView;
     private TextView status;
     private Button reconnect;
+    private boolean agentMode;
+
+    public static final String EXTRA_MODE = "workspace_mode";
+    public static final String MODE_TERMINAL = "terminal";
+    public static final String MODE_AGENT = "agent";
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         runtime = new GoarRuntimeController(this);
+        agentMode = MODE_AGENT.equals(getIntent().getStringExtra(EXTRA_MODE));
         setContentView(createContent());
         terminalView.post(this::openTerminal);
     }
@@ -72,14 +78,14 @@ public final class GoarWorkspaceActivity extends Activity {
         LinearLayout labels = new LinearLayout(this);
         labels.setOrientation(LinearLayout.VERTICAL);
         labels.setPadding(dp(10), 0, dp(8), 0);
-        TextView title = text("GOAR", 17, WHITE);
+        TextView title = text(agentMode ? "GOAR AGENT" : "KALI TERMINAL", 17, WHITE);
         title.setLetterSpacing(0.10f);
         labels.addView(title);
-        status = text("KALI TERMINAL · CONNECTING", 10, MUTED);
+        status = text(agentMode ? "AGENT CHAT · CONNECTING" : "DIRECT SHELL · CONNECTING", 10, MUTED);
         status.setLetterSpacing(0.08f);
         labels.addView(status);
         header.addView(labels, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        Button close = button("RUNTIME", BLACK, WHITE, STROKE);
+        Button close = button("CONSOLE", BLACK, WHITE, STROKE);
         close.setOnClickListener(view -> finish());
         header.addView(close, new LinearLayout.LayoutParams(dp(100), dp(42)));
         page.addView(header, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -119,19 +125,21 @@ public final class GoarWorkspaceActivity extends Activity {
         }
         if (terminal != null) terminal.close();
         reconnect.setEnabled(false);
-        status.setText("KALI TERMINAL · STARTING PTY");
-        terminalView.appendSystemLine("opening app-private Kali PRoot terminal…");
+        status.setText(agentMode ? "AGENT CHAT · STARTING PTY" : "DIRECT SHELL · STARTING PTY");
+        if (agentMode) terminalView.appendSystemLine("opening app-private Kali PRoot agent chat…");
         terminalExecutor.execute(() -> {
             try {
-                GoarPtyBridge opened = runtime.openTerminal(terminalView.terminalRows(), terminalView.terminalColumns());
+                GoarPtyBridge opened = agentMode
+                        ? runtime.openTerminal(terminalView.terminalRows(), terminalView.terminalColumns())
+                        : runtime.openDirectTerminal(terminalView.terminalRows(), terminalView.terminalColumns());
                 synchronized (this) { terminal = opened; }
                 opened.startReader(new GoarPtyBridge.Listener() {
                     @Override public void onBytes(byte[] data, int length) { runOnUiThread(() -> terminalView.appendBytes(data, length)); }
-                    @Override public void onClosed(int ignored) { runOnUiThread(() -> { status.setText("KALI TERMINAL · CLOSED"); reconnect.setEnabled(true); terminalView.appendSystemLine("terminal session closed"); }); }
-                    @Override public void onError(Exception error) { runOnUiThread(() -> { status.setText("KALI TERMINAL · ERROR"); reconnect.setEnabled(true); terminalView.appendSystemLine("terminal error: " + error.getMessage()); }); }
+                    @Override public void onClosed(int ignored) { runOnUiThread(() -> { status.setText(agentMode ? "AGENT CHAT · CLOSED" : "DIRECT SHELL · CLOSED"); reconnect.setEnabled(true); if (agentMode) terminalView.appendSystemLine("agent chat session closed"); }); }
+                    @Override public void onError(Exception error) { runOnUiThread(() -> { status.setText(agentMode ? "AGENT CHAT · ERROR" : "DIRECT SHELL · ERROR"); reconnect.setEnabled(true); if (agentMode) terminalView.appendSystemLine("agent chat error: " + error.getMessage()); }); }
                 });
                 runOnUiThread(() -> {
-                    status.setText("KALI TERMINAL · PTY · LOOPS ACTIVE");
+                    status.setText(agentMode ? "AGENT CHAT · PTY" : "DIRECT SHELL · PTY");
                     reconnect.setEnabled(true);
                     terminalView.requestFocus();
                     InputMethodManager manager = getSystemService(InputMethodManager.class);
@@ -139,9 +147,9 @@ public final class GoarWorkspaceActivity extends Activity {
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> {
-                    status.setText("KALI TERMINAL · START FAILED");
+                    status.setText(agentMode ? "AGENT CHAT · START FAILED" : "DIRECT SHELL · START FAILED");
                     reconnect.setEnabled(true);
-                    terminalView.appendSystemLine("startup failed: " + (error.getMessage() == null ? error.toString() : error.getMessage()));
+                    if (agentMode) terminalView.appendSystemLine("agent chat startup failed: " + (error.getMessage() == null ? error.toString() : error.getMessage()));
                 });
             }
         });

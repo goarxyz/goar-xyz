@@ -18,7 +18,10 @@ WORKSPACE = Path(os.getenv("GOAR_WORKSPACE", "/data/workspace"))
 PYTHON = os.getenv("GOAR_PYTHON", "/opt/vibehack/.venv/bin/python")
 TURN_RUNNER = Path("/opt/goar-terminal/goar_agent_turn.py")
 POLL_SECONDS = max(2, int(os.getenv("GOAR_LOOP_POLL_SECONDS", "5")))
-TURN_TIMEOUT = max(30, int(os.getenv("GOAR_LOOP_TURN_TIMEOUT", "300")))
+# A durable foreground-service loop should not silently terminate a long build or
+# tool installation. Set GOAR_LOOP_TURN_TIMEOUT to a positive number only when
+# an operator explicitly wants a per-turn wall-clock limit; zero means none.
+TURN_TIMEOUT = max(0, int(os.getenv("GOAR_LOOP_TURN_TIMEOUT", "0")))
 RUNNING = True
 
 
@@ -58,16 +61,17 @@ def run_due(core: GoarVibeCore) -> None:
             prompt,
         ]
         try:
-            result = subprocess.run(
-                command,
-                cwd=str(WORKSPACE),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=TURN_TIMEOUT,
-                env=os.environ.copy(),
-            )
+            options = {
+                "cwd": str(WORKSPACE),
+                "stdin": subprocess.DEVNULL,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+                "env": os.environ.copy(),
+            }
+            if TURN_TIMEOUT > 0:
+                options["timeout"] = TURN_TIMEOUT
+            result = subprocess.run(command, **options)
             core.events.append(
                 "loop_runner_result",
                 {

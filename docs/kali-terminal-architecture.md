@@ -1,6 +1,6 @@
 # GOAR Terminal Kali PRoot Architecture
 
-**Status:** Implemented terminal-first Android release architecture (v1.1.0).
+**Status:** Implemented terminal-first Android release architecture (v1.2.0).
 **Scope:** This replaces the earlier Flask, browser, Chromium, VNC, and noVNC runtime. The Android application remains a compact launcher; the Kali guest remains a separately downloaded and verified archive.
 
 ## Runtime Topology
@@ -26,9 +26,15 @@ The Android front end is a real terminal session, not a scrollable command-outpu
 | Input | The view sends UTF-8 input plus Enter, Backspace, Tab, Escape, and standard arrow, home/end, and page-navigation sequences to the PTY. |
 | Resize | View geometry becomes terminal rows/columns and invokes the native PTY window-size operation so the guest can receive its resize signal. |
 | Output | The renderer keeps the product deliberately monochrome while accepting the terminal control sequences used by Bash and VibeHack. |
-| Lifecycle | `GoarPtyBridge` owns the spawned child descriptor and process; the workspace activity closes it explicitly, so neither a web server nor a browser lifecycle exists. |
+| Lifecycle | Each Direct Terminal, Agent Chat, Control, or Package workspace owns and closes only its own PTY child. The foreground service separately owns the durable loop-daemon PRoot child, so no web server or browser lifecycle exists. |
 
-The implementation uses a dedicated Android JNI terminal bridge informed by ptyctl behavior and contains no WebView, HTTP bridge, Flask process, VNC/noVNC component, or browser dependency.
+The implementation uses a dedicated Android JNI terminal bridge informed by ptyctl behavior and contains no WebView, HTTP bridge, Flask process, VNC/noVNC component, or browser dependency. The extractor accepts literal backslashes in valid Linux filenames—needed for Kali systemd `\\x2d` unit names—while retaining canonical root-directory containment checks to reject traversal.
+
+## Operator Console Separation
+
+The native monochrome console has six focused entry points: **Terminal**, **Agent Chat**, **Control**, **Kali Packages**, **Configuration**, and **Runtime**. Direct Terminal launches an ordinary interactive `/bin/bash -l` session and receives no app-injected agent, package, or control content. Agent Chat is the only workspace that launches `/usr/local/bin/goar-terminal` and VibeHack. Control and Kali Packages each run their own managed PTY with output retained in their own screen.
+
+The Configuration screen saves an optional provider key and model in app-private `home/.vibehack/.env`. The key is masked in the UI after it is saved and is loaded only by the Agent Chat process. Kali Packages validates package-name tokens and only runs APT after an explicit operator selection or install action.
 
 ## Kali Guest Layout
 
@@ -60,7 +66,7 @@ The reusable Mistral Vibe-style core remains local and library-only. It is not a
 | Plans and checkpoints | Captures multi-step intent, lifecycle evidence, file-change ledgers, review, and safe reversion. |
 | Trusted roots | Restricts agent workspace operations to explicitly trusted paths. |
 | Hooks and middleware | Applies pre-tool/post-tool/post-agent policy, injection resistance, cancellation, and event capture. |
-| Loop manager | Persists up to 50 session-scoped loops, enforces a 30-second minimum interval, evaluates completion/block conditions, and runs only one bounded turn per firing. |
+| Loop manager | Persists up to 50 session-scoped loops, enforces a 30-second minimum interval, evaluates completion/block conditions, and runs one serialized turn per firing under a foreground-service-owned daemon. There is no implicit five-minute turn cutoff; an operator may configure a positive timeout explicitly. |
 | Event ledger | Keeps append-only JSONL events and argument digests without storing raw secrets. |
 | Atomic compaction | Commits session summaries only after validation succeeds. |
 
@@ -68,7 +74,7 @@ The rewritten GOAR terminal prompt directs the agent to discover tools, install 
 
 ## Package Budget and Reproducibility
 
-The verified official minimal Kali ARM64 archive is 137,313,840 bytes compressed before GOAR additions. The reproducibly rebuilt terminal payload is **322,092,086 bytes** compressed with SHA-256 `7a8b7db631ee9a203d66ae57023c23916bbdf43e0b92f78c8a336ce9c208324c`. It remains a minimal Kali base plus the requested full terminal agent—not the older full desktop/browser distribution.
+The verified official minimal Kali ARM64 archive is 137,313,840 bytes compressed before GOAR additions. The reproducibly rebuilt terminal payload is **322,088,301 bytes** compressed with SHA-256 `f688825035b2c8e287367cd575fe5b2d7217dffc1809ff72af2f4a83d703cf32`. It remains a minimal Kali base plus the requested full terminal agent—not the older full desktop/browser distribution.
 
 The build records the upstream source revisions, base-archive checksum, adapted-source changes, dependency lock, final archive checksum, manifest size, and archive safety audit. The Android installer downloads the final archive rather than embedding it in the compact signed APK.
 

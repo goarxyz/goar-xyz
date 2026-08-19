@@ -84,3 +84,6 @@ proot/kali-terminal-rootfs-build.log
 android/app/.cxx/
 android/*.log
 test-output*.log
+proot/kali-terminal-rootfs-build-*.log
+release-assets/
+staged-diff-check.log

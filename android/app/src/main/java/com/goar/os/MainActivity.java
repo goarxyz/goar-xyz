@@ -50,7 +50,7 @@ public final class MainActivity extends Activity {
             String detail = intent.getStringExtra(GoarRuntimeController.EXTRA_DETAIL);
             updateStatus(stage, percent, detail);
             if ("running".equals(stage)) {
-                openWorkspace();
+                openConsole();
             }
         }
     };
@@ -67,8 +67,8 @@ public final class MainActivity extends Activity {
         manifestUrl.setText(controller.configuredManifestUrl());
         updateStatus(controller.isInstalled() ? "installed" : "setup", 0,
                 controller.isInstalled()
-                        ? "The verified Alpine backend is installed locally."
-                        : "Install the verified full GOAR backend to this device.");
+                        ? "The verified Kali terminal backend is installed locally."
+                        : "Install the verified Kali terminal backend to this device.");
     }
 
     @Override
@@ -160,8 +160,8 @@ public final class MainActivity extends Activity {
         startButton.setOnClickListener(view -> requestStart());
         page.addView(startButton, withMargins(matchWrapHeight(dp(54)), 0, dp(10), 0, 0));
 
-        workspaceButton = button("OPEN WORKSPACE", BLACK, WHITE, STROKE);
-        workspaceButton.setOnClickListener(view -> openWorkspace());
+        workspaceButton = button("OPEN OPERATOR CONSOLE", BLACK, WHITE, STROKE);
+        workspaceButton.setOnClickListener(view -> openConsole());
         page.addView(workspaceButton, withMargins(matchWrapHeight(dp(54)), 0, dp(10), 0, 0));
 
         TextView privacy = text("The backend, workspace, state, and temporary files remain in GOAR OS app-private storage. The local backend can make normal outbound network connections.", 12, MUTED);
@@ -211,8 +211,8 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void openWorkspace() {
-        startActivity(new Intent(this, GoarWorkspaceActivity.class));
+    private void openConsole() {
+        startActivity(new Intent(this, GoarConsoleActivity.class));
     }
 
     private void updateStatus(String stage, int percent, String detail) {

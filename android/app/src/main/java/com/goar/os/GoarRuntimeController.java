@@ -185,7 +185,176 @@ public final class GoarRuntimeController {
         environment.put("LD_LIBRARY_PATH", runtimeLibraryDirectory.getAbsolutePath() + File.pathSeparator + nativeDirectory.getAbsolutePath());
         environment.put("GOAR_ANDROID_SANDBOX", "1");
         environment.put("GOAR_NATIVE_LIBRARIES", nativeDirectory.getAbsolutePath());
+        // The foreground service owns the one durable loop daemon. A terminal
+        // PTY is interactive only and must not create a competing scheduler.
+        environment.put("GOAR_DISABLE_LOOPS", "1");
         return GoarPtyBridge.start(command, environment, rootfsDir, rows, columns);
+    }
+
+    /** Opens a clean operator-owned Kali shell; no agent launcher or chat output is involved. */
+    public synchronized GoarPtyBridge openDirectTerminal(int rows, int columns) throws Exception {
+        if (!isInstalled()) {
+            throw new IOException("Kali terminal rootfs has not been installed");
+        }
+        ensureDirectories();
+        writeResolver();
+        File nativeDirectory = new File(context.getApplicationInfo().nativeLibraryDir);
+        File proot = new File(nativeDirectory, "libproot.so");
+        File loader = new File(nativeDirectory, "libproot-loader.so");
+        File loader32 = new File(nativeDirectory, "libproot-loader32.so");
+        File talloc = new File(nativeDirectory, "libtalloc.so");
+        if (!proot.canExecute() || !loader.canExecute() || !loader32.canExecute() || !talloc.isFile()) {
+            throw new IOException("The complete dual-loader PRoot bootstrap is unavailable for this device ABI");
+        }
+        File runtimeLibraryDirectory = prepareNativeRuntimeLibraries(talloc);
+        List<String> command = new ArrayList<>();
+        command.add(proot.getAbsolutePath());
+        command.add("-0");
+        command.add("-r");
+        command.add(rootfsDir.getAbsolutePath());
+        command.add("-b"); command.add(stateDir.getAbsolutePath() + ":/data/goar");
+        command.add("-b"); command.add(workspaceDir.getAbsolutePath() + ":/data/workspace");
+        command.add("-b"); command.add(tmpDir.getAbsolutePath() + ":/tmp");
+        command.add("-b"); command.add(resolverFile.getAbsolutePath() + ":/etc/resolv.conf");
+        command.add("-b"); command.add("/dev");
+        command.add("-b"); command.add("/proc");
+        command.add("-b"); command.add("/sys");
+        command.add("-w"); command.add("/data/workspace");
+        command.add("/bin/bash");
+        command.add("-lc");
+        command.add("exec /bin/bash -l");
+        java.util.LinkedHashMap<String, String> environment = new java.util.LinkedHashMap<>();
+        environment.put("HOME", "/data/goar/home");
+        environment.put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        environment.put("TERM", "xterm-256color");
+        environment.put("COLORTERM", "truecolor");
+        environment.put("LANG", "C.UTF-8");
+        environment.put("TMPDIR", "/tmp");
+        environment.put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
+        environment.put("PROOT_LOADER", loader.getAbsolutePath());
+        environment.put("LD_LIBRARY_PATH", runtimeLibraryDirectory.getAbsolutePath() + File.pathSeparator + nativeDirectory.getAbsolutePath());
+        environment.put("GOAR_ANDROID_SANDBOX", "1");
+        environment.put("GOAR_NATIVE_LIBRARIES", nativeDirectory.getAbsolutePath());
+        environment.put("GOAR_DISABLE_LOOPS", "1");
+        return GoarPtyBridge.start(command, environment, rootfsDir, rows, columns);
+    }
+
+    /** Runs an app-formed operator command in its own PTY; callers must validate all arguments. */
+    public synchronized GoarPtyBridge openManagedCommandTerminal(String command, int rows, int columns) throws Exception {
+        if (command == null || command.trim().isEmpty() || command.indexOf('\n') >= 0 || command.indexOf('\r') >= 0) {
+            throw new IOException("Invalid managed guest command");
+        }
+        GoarPtyBridge session = openDirectTerminal(rows, columns);
+        session.write(command.trim() + "\n");
+        return session;
+    }
+
+    /** Starts the durable guest scheduler under Android's foreground service. */
+    public synchronized Process startDurableLoopDaemon() throws Exception {
+        if (!isInstalled()) {
+            throw new IOException("Kali terminal rootfs has not been installed");
+        }
+        ensureDirectories();
+        writeResolver();
+        File nativeDirectory = new File(context.getApplicationInfo().nativeLibraryDir);
+        File proot = new File(nativeDirectory, "libproot.so");
+        File loader = new File(nativeDirectory, "libproot-loader.so");
+        File loader32 = new File(nativeDirectory, "libproot-loader32.so");
+        File talloc = new File(nativeDirectory, "libtalloc.so");
+        if (!proot.canExecute() || !loader.canExecute() || !loader32.canExecute() || !talloc.isFile()) {
+            throw new IOException("The complete dual-loader PRoot bootstrap is unavailable for this device ABI");
+        }
+        File runtimeLibraryDirectory = prepareNativeRuntimeLibraries(talloc);
+        List<String> command = new ArrayList<>();
+        command.add(proot.getAbsolutePath());
+        command.add("-0");
+        command.add("-r");
+        command.add(rootfsDir.getAbsolutePath());
+        command.add("-b"); command.add(stateDir.getAbsolutePath() + ":/data/goar");
+        command.add("-b"); command.add(workspaceDir.getAbsolutePath() + ":/data/workspace");
+        command.add("-b"); command.add(tmpDir.getAbsolutePath() + ":/tmp");
+        command.add("-b"); command.add(resolverFile.getAbsolutePath() + ":/etc/resolv.conf");
+        command.add("-b"); command.add("/dev");
+        command.add("-b"); command.add("/proc");
+        command.add("-b"); command.add("/sys");
+        command.add("-w"); command.add("/data/workspace");
+        command.add("/bin/bash");
+        command.add("-lc");
+        command.add("exec /opt/vibehack/.venv/bin/python /opt/goar-terminal/goar_loopd.py");
+        ProcessBuilder builder = new ProcessBuilder(command)
+                .directory(rootfsDir)
+                .redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.appendTo(new File(stateDir, "loopd-android.log")));
+        builder.environment().clear();
+        builder.environment().put("HOME", "/data/goar/home");
+        builder.environment().put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        builder.environment().put("TERM", "xterm-256color");
+        builder.environment().put("LANG", "C.UTF-8");
+        builder.environment().put("TMPDIR", "/tmp");
+        builder.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
+        builder.environment().put("PROOT_LOADER", loader.getAbsolutePath());
+        builder.environment().put("LD_LIBRARY_PATH", runtimeLibraryDirectory.getAbsolutePath() + File.pathSeparator + nativeDirectory.getAbsolutePath());
+        builder.environment().put("GOAR_ANDROID_SANDBOX", "1");
+        builder.environment().put("GOAR_NATIVE_LIBRARIES", nativeDirectory.getAbsolutePath());
+        builder.environment().put("GOAR_PROOT_GUEST", "1");
+        builder.environment().put("VH_SANDBOX", "true");
+        builder.environment().put("VH_SYSTEM_PROMPT", "/opt/goar-terminal/GOAR_TERMINAL_PROMPT.md");
+        builder.environment().put("GOAR_WORKSPACE", "/data/workspace");
+        builder.environment().put("GOAR_CONTROL_ROOT", "/data/goar/control");
+        builder.environment().put("GOAR_RUNTIME_TMP", "/data/goar/tmp");
+        builder.environment().put("GOAR_DISABLE_LOOPS", "1");
+        builder.environment().put("GOAR_LOOP_TURN_TIMEOUT", "0");
+        return builder.start();
+    }
+
+    public synchronized boolean hasAgentApiKey() {
+        return readAgentEnv().containsKey("VH_API_KEY");
+    }
+
+    public synchronized String configuredAgentModel() {
+        return readAgentEnv().getOrDefault("VH_MODEL", "");
+    }
+
+    public synchronized void saveAgentConfiguration(String apiKey, String model) throws IOException {
+        String normalizedModel = model == null ? "" : model.trim();
+        if (!normalizedModel.isEmpty() && !normalizedModel.matches("[A-Za-z0-9._:/-]{1,160}")) {
+            throw new IOException("Model name contains unsupported characters");
+        }
+        String normalizedKey = apiKey == null ? "" : apiKey.trim();
+        if (normalizedKey.indexOf('\n') >= 0 || normalizedKey.indexOf('\r') >= 0 || normalizedKey.length() > 512) {
+            throw new IOException("Provider key contains unsupported characters");
+        }
+        ensureDirectories();
+        java.util.LinkedHashMap<String, String> values = readAgentEnv();
+        if (!normalizedKey.isEmpty()) values.put("VH_API_KEY", normalizedKey);
+        if (!normalizedModel.isEmpty()) values.put("VH_MODEL", normalizedModel);
+        File env = new File(stateDir, "home/.vibehack/.env");
+        File parent = env.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) throw new IOException("Unable to create agent configuration directory");
+        StringBuilder output = new StringBuilder("# GOAR OS app-private VibeHack configuration\n");
+        for (java.util.Map.Entry<String, String> entry : values.entrySet()) {
+            output.append(entry.getKey()).append('=').append(entry.getValue()).append('\n');
+        }
+        writeText(env, output.toString());
+    }
+
+    private java.util.LinkedHashMap<String, String> readAgentEnv() {
+        java.util.LinkedHashMap<String, String> values = new java.util.LinkedHashMap<>();
+        File env = new File(stateDir, "home/.vibehack/.env");
+        if (!env.isFile()) return values;
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(env))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                int marker = line.indexOf('=');
+                if (marker <= 0 || line.startsWith("#")) continue;
+                String key = line.substring(0, marker).trim();
+                String value = line.substring(marker + 1).trim();
+                if (("VH_API_KEY".equals(key) || "VH_MODEL".equals(key)) && !value.isEmpty()) values.put(key, value);
+            }
+        } catch (IOException ignored) {
+            // Treat an unreadable private configuration as absent; save will surface errors.
+        }
+        return values;
     }
 
     private void writeResolver() throws IOException {
@@ -482,7 +651,11 @@ public final class GoarRuntimeController {
     }
 
     private static File safeTarFile(File root, String name) throws IOException {
-        if (name.isEmpty() || name.startsWith("/") || name.contains("\\") || name.contains("../")) {
+        // Backslash is an ordinary filename character on Android/Linux. Kali's
+        // systemd units use literal `\\x2d` escape sequences in filenames, so
+        // rejecting every backslash breaks a valid minimal rootfs. Canonical
+        // containment below remains the traversal defense for all separators.
+        if (name.isEmpty() || name.startsWith("/") || name.contains("../")) {
             throw new IOException("Unsafe path in rootfs archive: " + name);
         }
         File canonicalRoot = root.getCanonicalFile();
