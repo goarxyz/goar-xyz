@@ -20,6 +20,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.URL;
@@ -60,6 +61,10 @@ public final class GoarRuntimeController {
     private final File cacheDir;
     private final File logFile;
     private final File resolverFile;
+    // Android removes version suffixes from packaged JNI filenames. PRoot is
+    // linked against libtalloc.so.2, so materialize that exact soname below the
+    // app-private GOAR directory before launching it.
+    private final File nativeRuntimeDir;
     private final SharedPreferences preferences;
     private Process process;
 
@@ -73,6 +78,7 @@ public final class GoarRuntimeController {
         this.cacheDir = new File(baseDir, "cache");
         this.logFile = new File(baseDir, "goar.log");
         this.resolverFile = new File(baseDir, "resolv.conf");
+        this.nativeRuntimeDir = new File(baseDir, "native-runtime");
         this.preferences = this.context.getSharedPreferences("goar_runtime", Context.MODE_PRIVATE);
     }
 
@@ -163,6 +169,10 @@ public final class GoarRuntimeController {
         if (!proot.canExecute() || !loader.canExecute()) {
             throw new IOException("The PRoot bootstrap is unavailable for this device ABI");
         }
+        if (!talloc.isFile() || !shmem.isFile()) {
+            throw new IOException("The PRoot bootstrap is missing required native libraries");
+        }
+        File runtimeLibraryDirectory = prepareNativeRuntimeLibraries(talloc);
 
         report(reporter, "starting", 0, "Starting the contained GOAR backend");
         List<String> command = new ArrayList<>();
@@ -182,6 +192,10 @@ public final class GoarRuntimeController {
         command.add("/dev");
         command.add("-b");
         command.add("/proc");
+        command.add("-b");
+        command.add("/sys");
+        command.add("-w");
+        command.add("/data/workspace");
         command.add("/bin/sh");
         command.add("-lc");
         command.add("export GOAR_HOME=/data/goar GOAR_WORKSPACE=/data/workspace "
@@ -194,13 +208,21 @@ public final class GoarRuntimeController {
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile));
         builder.environment().clear();
         builder.environment().put("HOME", "/data/goar");
+        builder.environment().put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        builder.environment().put("TERM", "xterm-256color");
+        builder.environment().put("LANG", "C.UTF-8");
         builder.environment().put("TMPDIR", "/tmp");
+        builder.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
         builder.environment().put("PROOT_LOADER", loader.getAbsolutePath());
-        builder.environment().put("LD_LIBRARY_PATH", nativeDirectory.getAbsolutePath());
+        // The versioned talloc filename is in app-private storage; Android's
+        // extracted native directory retains libandroid-shmem.so for this
+        // legacy Termux PRoot build. Both locations must remain visible.
+        builder.environment().put(
+                "LD_LIBRARY_PATH",
+                runtimeLibraryDirectory.getAbsolutePath() + File.pathSeparator + nativeDirectory.getAbsolutePath()
+        );
         builder.environment().put("GOAR_ANDROID_SANDBOX", "1");
-        if (talloc.isFile() && shmem.isFile()) {
-            builder.environment().put("GOAR_NATIVE_LIBRARIES", nativeDirectory.getAbsolutePath());
-        }
+        builder.environment().put("GOAR_NATIVE_LIBRARIES", nativeDirectory.getAbsolutePath());
         process = builder.start();
         waitForHealth(reporter);
         report(reporter, "running", 100, "GOAR is ready at http://127.0.0.1:8080/");
@@ -230,7 +252,7 @@ public final class GoarRuntimeController {
         IOException latest = null;
         while (System.currentTimeMillis() < deadline) {
             if (process == null || !process.isAlive()) {
-                throw new IOException("GOAR exited during startup. See " + logFile.getAbsolutePath());
+                throw startupFailure("GOAR exited during startup");
             }
             try {
                 HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:8080/health").openConnection();
@@ -247,7 +269,40 @@ public final class GoarRuntimeController {
             report(reporter, "starting", 0, "Waiting for GOAR backend");
             Thread.sleep(800);
         }
-        throw new IOException("GOAR did not become ready", latest);
+        throw startupFailure("GOAR did not become ready", latest);
+    }
+
+    /**
+     * Android users cannot ordinarily browse app-private files. Include a small,
+     * bounded tail of the PRoot/backend log in the reported exception so a launch
+     * failure can be diagnosed from the installation screen without weakening
+     * storage isolation.
+     */
+    private IOException startupFailure(String message) {
+        return startupFailure(message, null);
+    }
+
+    private IOException startupFailure(String message, IOException cause) {
+        String tail = readLogTail();
+        String detail = tail.isEmpty() ? message : message + ": " + tail;
+        return cause == null ? new IOException(detail) : new IOException(detail, cause);
+    }
+
+    private String readLogTail() {
+        if (!logFile.isFile()) {
+            return "";
+        }
+        final int maximumBytes = 12 * 1024;
+        try (RandomAccessFile input = new RandomAccessFile(logFile, "r")) {
+            long start = Math.max(0L, input.length() - maximumBytes);
+            input.seek(start);
+            byte[] bytes = new byte[(int) (input.length() - start)];
+            input.readFully(bytes);
+            String tail = new String(bytes, StandardCharsets.UTF_8).trim();
+            return tail.length() > 2_000 ? tail.substring(tail.length() - 2_000) : tail;
+        } catch (IOException ignored) {
+            return "";
+        }
     }
 
     private void writeResolver() throws IOException {
@@ -574,6 +629,40 @@ public final class GoarRuntimeController {
         }
     }
 
+    /**
+     * PRoot requests the talloc soname (`libtalloc.so.2`), whereas Android
+     * packages JNI libraries without that version suffix. Copying the packaged
+     * library to an app-private compatibility directory gives Bionic a real
+     * filename matching the requested soname without weakening the sandbox or
+     * relying on a symlink in the native library directory.
+     */
+    private File prepareNativeRuntimeLibraries(File packagedTalloc) throws IOException {
+        if (!nativeRuntimeDir.isDirectory() && !nativeRuntimeDir.mkdirs()) {
+            throw new IOException("Could not create PRoot native runtime directory");
+        }
+        File versionedTalloc = new File(nativeRuntimeDir, "libtalloc.so.2");
+        if (!versionedTalloc.isFile() || versionedTalloc.length() != packagedTalloc.length()) {
+            File pending = new File(nativeRuntimeDir, "libtalloc.so.2.pending");
+            if (pending.exists() && !pending.delete()) {
+                throw new IOException("Could not replace pending PRoot native library");
+            }
+            try (InputStream input = new BufferedInputStream(new FileInputStream(packagedTalloc));
+                 BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(pending))) {
+                byte[] buffer = new byte[64 * 1024];
+                int count;
+                while ((count = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, count);
+                }
+            }
+            setMode(pending, 0755, false);
+            atomicMove(pending, versionedTalloc);
+        }
+        if (!versionedTalloc.isFile()) {
+            throw new IOException("Could not prepare libtalloc.so.2 for PRoot");
+        }
+        return nativeRuntimeDir;
+    }
+
     private static String sha256(File file) throws Exception {
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         byte[] buffer = new byte[128 * 1024];
@@ -617,7 +706,7 @@ public final class GoarRuntimeController {
     }
 
     private void ensureDirectories() throws IOException {
-        for (File directory : new File[]{baseDir, stateDir, workspaceDir, tmpDir, cacheDir}) {
+        for (File directory : new File[]{baseDir, stateDir, workspaceDir, tmpDir, cacheDir, nativeRuntimeDir}) {
             if (!directory.isDirectory() && !directory.mkdirs()) {
                 throw new IOException("Could not create " + directory.getAbsolutePath());
             }
