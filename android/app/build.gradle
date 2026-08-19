@@ -13,6 +13,8 @@ if (releaseSigningPropertiesFile.isFile()) {
 }
 def hasReleaseSigning = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
         .every { releaseSigningProperties.getProperty(it) }
+def requestedAbi = (project.findProperty('goarTargetAbi') ?: 'arm64-v8a').toString()
+def requestedManifestUrl = (project.findProperty('goarManifestUrl') ?: 'https://github.com/goarxyz/goar-xyz/releases/download/goar-android-v1/goar-rootfs-arm64-v8a.json').toString()
 
 android {
     namespace 'com.goar.os'
@@ -24,9 +26,10 @@ android {
         targetSdk 35
         versionCode 2
         versionName '1.0.1'
-        buildConfigField 'String', 'DEFAULT_MANIFEST_URL', '"https://github.com/goarxyz/goar-xyz/releases/download/goar-android-v1/goar-rootfs-arm64-v8a.json"'
+        buildConfigField 'String', 'DEFAULT_MANIFEST_URL', '"' + requestedManifestUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        buildConfigField 'String', 'TARGET_ROOTFS_ARCH', '"' + requestedAbi.replace('\\', '\\\\').replace('"', '\\"') + '"'
         ndk {
-            abiFilters 'arm64-v8a'
+            abiFilters requestedAbi
         }
     }
 

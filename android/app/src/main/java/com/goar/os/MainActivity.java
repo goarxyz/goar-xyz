@@ -8,26 +8,40 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+/**
+ * Native installation and runtime-status screen. The actual GOAR workspace is
+ * intentionally hosted by GoarWorkspaceActivity so install controls and the
+ * local operator UI never compete for the same screen.
+ */
 public final class MainActivity extends Activity {
     private static final int REQUEST_NOTIFICATION = 101;
+    private static final int BLACK = Color.BLACK;
+    private static final int WHITE = Color.rgb(245, 245, 245);
+    private static final int MUTED = Color.rgb(164, 164, 164);
+    private static final int SURFACE = Color.rgb(18, 18, 18);
+    private static final int STROKE = Color.rgb(70, 70, 70);
+
     private TextView status;
+    private TextView stateLabel;
     private ProgressBar progress;
     private EditText manifestUrl;
-    private WebView webView;
-    private LinearLayout controlPanel;
+    private Button installButton;
+    private Button startButton;
+    private Button workspaceButton;
+
     private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -36,7 +50,7 @@ public final class MainActivity extends Activity {
             String detail = intent.getStringExtra(GoarRuntimeController.EXTRA_DETAIL);
             updateStatus(stage, percent, detail);
             if ("running".equals(stage)) {
-                openGoar();
+                openWorkspace();
             }
         }
     };
@@ -53,8 +67,8 @@ public final class MainActivity extends Activity {
         manifestUrl.setText(controller.configuredManifestUrl());
         updateStatus(controller.isInstalled() ? "installed" : "setup", 0,
                 controller.isInstalled()
-                        ? "GOAR rootfs is installed. Start the local backend when ready."
-                        : "Download the complete Alpine GOAR backend to begin.");
+                        ? "The verified Alpine backend is installed locally."
+                        : "Install the verified full GOAR backend to this device.");
     }
 
     @Override
@@ -76,68 +90,95 @@ public final class MainActivity extends Activity {
 
     private View createContent() {
         ScrollView scroll = new ScrollView(this);
-        controlPanel = new LinearLayout(this);
-        controlPanel.setOrientation(LinearLayout.VERTICAL);
-        controlPanel.setPadding(dp(20), dp(24), dp(20), dp(24));
-        controlPanel.setBackgroundColor(Color.rgb(11, 16, 32));
-        scroll.addView(controlPanel);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(BLACK);
 
-        TextView title = text("GOAR OS", 28, Color.WHITE);
-        title.setGravity(Gravity.CENTER_HORIZONTAL);
-        controlPanel.addView(title, matchWrap());
-        TextView subtitle = text("Full Alpine backend in a private Android PRoot sandbox", 15, Color.rgb(190, 204, 235));
-        subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
-        controlPanel.addView(subtitle, withMargins(matchWrap(), 0, dp(6), 0, dp(20)));
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setGravity(Gravity.CENTER_HORIZONTAL);
+        page.setPadding(dp(24), dp(34), dp(24), dp(28));
+        page.setBackgroundColor(BLACK);
+        scroll.addView(page, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT, ScrollView.LayoutParams.MATCH_PARENT));
 
-        TextView network = text("The rootfs has normal outbound network access for providers, browsing, downloads, and API calls. Its files, workspace, state, and temporary data remain inside this app.", 14, Color.rgb(211, 220, 240));
-        controlPanel.addView(network, withMargins(matchWrap(), 0, 0, 0, dp(18)));
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.goar_logo);
+        logo.setContentDescription("GOAR logo");
+        logo.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        page.addView(logo, centered(dp(96), dp(96)));
 
-        TextView endpointLabel = text("Rootfs manifest URL", 14, Color.WHITE);
-        controlPanel.addView(endpointLabel, matchWrap());
-        manifestUrl = new EditText(this);
-        manifestUrl.setSingleLine(true);
-        manifestUrl.setTextColor(Color.WHITE);
-        manifestUrl.setTextSize(13);
-        manifestUrl.setHintTextColor(Color.rgb(155, 170, 205));
-        manifestUrl.setHint("https://…/goar-rootfs-arm64-v8a.json");
-        manifestUrl.setBackgroundColor(Color.rgb(26, 36, 66));
-        manifestUrl.setPadding(dp(12), dp(10), dp(12), dp(10));
-        controlPanel.addView(manifestUrl, withMargins(matchWrap(), 0, dp(6), 0, dp(16)));
+        TextView product = text("GOAR OS", 30, WHITE);
+        product.setLetterSpacing(0.08f);
+        product.setGravity(Gravity.CENTER);
+        page.addView(product, withMargins(matchWrap(), 0, dp(18), 0, 0));
 
-        Button setup = button("Download full GOAR backend and start", Color.rgb(32, 87, 212));
-        setup.setOnClickListener(view -> requestSetup());
-        controlPanel.addView(setup, matchWrap());
+        TextView edition = text("LOCAL OPERATOR · PRIVATE ROOTFS", 11, MUTED);
+        edition.setLetterSpacing(0.10f);
+        edition.setGravity(Gravity.CENTER);
+        page.addView(edition, withMargins(matchWrap(), 0, dp(8), 0, dp(26)));
 
-        Button start = button("Start installed backend", Color.rgb(35, 125, 89));
-        start.setOnClickListener(view -> requestStart());
-        controlPanel.addView(start, withMargins(matchWrap(), 0, dp(10), 0, 0));
+        page.addView(divider(), matchWrapHeight(dp(1)));
 
-        Button open = button("Open local GOAR interface", Color.rgb(81, 62, 170));
-        open.setOnClickListener(view -> openGoar());
-        controlPanel.addView(open, withMargins(matchWrap(), 0, dp(10), 0, 0));
+        TextView section = text("BACKEND INSTALLATION", 12, WHITE);
+        section.setLetterSpacing(0.10f);
+        page.addView(section, withMargins(matchWrap(), 0, dp(26), 0, dp(10)));
 
-        Button stop = button("Stop local backend", Color.rgb(135, 48, 58));
-        stop.setOnClickListener(view -> {
-            Intent intent = new Intent(this, GoarRuntimeService.class).setAction(GoarRuntimeService.ACTION_STOP);
-            startService(intent);
-        });
-        controlPanel.addView(stop, withMargins(matchWrap(), 0, dp(10), 0, dp(18)));
+        stateLabel = text("", 12, MUTED);
+        stateLabel.setLetterSpacing(0.08f);
+        page.addView(stateLabel, matchWrap());
+
+        status = text("", 15, WHITE);
+        status.setLineSpacing(dp(3), 1f);
+        page.addView(status, withMargins(matchWrap(), 0, dp(7), 0, dp(16)));
 
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
-        controlPanel.addView(progress, matchWrap());
-        status = text("", 14, Color.rgb(218, 225, 244));
-        controlPanel.addView(status, withMargins(matchWrap(), 0, dp(10), 0, 0));
+        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(WHITE));
+        progress.setBackgroundTintList(android.content.res.ColorStateList.valueOf(STROKE));
+        page.addView(progress, matchWrapHeight(dp(4)));
 
-        webView = new WebView(this);
-        webView.setVisibility(View.GONE);
-        webView.getSettings().setJavaScriptEnabled(true);
-        webView.getSettings().setDomStorageEnabled(true);
-        webView.getSettings().setAllowFileAccess(false);
-        webView.getSettings().setAllowContentAccess(false);
-        webView.setWebViewClient(new WebViewClient());
-        controlPanel.addView(webView, withMargins(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(620)), 0, dp(20), 0, 0));
+        TextView manifestLabel = text("ROOTFS MANIFEST", 11, MUTED);
+        manifestLabel.setLetterSpacing(0.10f);
+        page.addView(manifestLabel, withMargins(matchWrap(), 0, dp(26), 0, dp(8)));
+
+        manifestUrl = new EditText(this);
+        manifestUrl.setSingleLine(true);
+        manifestUrl.setTextColor(WHITE);
+        manifestUrl.setTextSize(12);
+        manifestUrl.setHintTextColor(MUTED);
+        manifestUrl.setHint("https://…/goar-rootfs-arm64-v8a.json");
+        manifestUrl.setSelectAllOnFocus(false);
+        manifestUrl.setPadding(dp(14), dp(10), dp(14), dp(10));
+        manifestUrl.setBackground(outline(SURFACE, STROKE, dp(1)));
+        page.addView(manifestUrl, matchWrap());
+
+        installButton = button("INSTALL & START", WHITE, BLACK, WHITE);
+        installButton.setOnClickListener(view -> requestSetup());
+        page.addView(installButton, withMargins(matchWrapHeight(dp(54)), 0, dp(20), 0, 0));
+
+        startButton = button("START INSTALLED BACKEND", BLACK, WHITE, STROKE);
+        startButton.setOnClickListener(view -> requestStart());
+        page.addView(startButton, withMargins(matchWrapHeight(dp(54)), 0, dp(10), 0, 0));
+
+        workspaceButton = button("OPEN WORKSPACE", BLACK, WHITE, STROKE);
+        workspaceButton.setOnClickListener(view -> openWorkspace());
+        page.addView(workspaceButton, withMargins(matchWrapHeight(dp(54)), 0, dp(10), 0, 0));
+
+        TextView privacy = text("The backend, workspace, state, and temporary files remain in GOAR OS app-private storage. The local backend can make normal outbound network connections.", 12, MUTED);
+        privacy.setGravity(Gravity.CENTER);
+        privacy.setLineSpacing(dp(3), 1f);
+        page.addView(privacy, withMargins(matchWrap(), 0, dp(28), 0, 0));
+
+        TextView stop = text("STOP LOCAL BACKEND", 12, MUTED);
+        stop.setGravity(Gravity.CENTER);
+        stop.setLetterSpacing(0.08f);
+        stop.setPadding(dp(8), dp(20), dp(8), dp(8));
+        stop.setOnClickListener(view -> {
+            Intent intent = new Intent(this, GoarRuntimeService.class).setAction(GoarRuntimeService.ACTION_STOP);
+            startService(intent);
+            updateStatus("stopping", 0, "Stopping the local backend");
+        });
+        page.addView(stop, matchWrap());
         return scroll;
     }
 
@@ -170,15 +211,24 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void openGoar() {
-        webView.setVisibility(View.VISIBLE);
-        webView.loadUrl("http://127.0.0.1:8080/");
+    private void openWorkspace() {
+        startActivity(new Intent(this, GoarWorkspaceActivity.class));
     }
 
     private void updateStatus(String stage, int percent, String detail) {
-        progress.setProgress(Math.max(0, Math.min(100, percent)));
-        String title = stage == null ? "status" : stage.replace('_', ' ');
-        status.setText(title.toUpperCase() + "\n" + (detail == null ? "" : detail));
+        int bounded = Math.max(0, Math.min(100, percent));
+        progress.setProgress(bounded);
+        String heading = stage == null ? "STATUS" : stage.replace('_', ' ').toUpperCase();
+        stateLabel.setText(heading + (bounded > 0 ? " · " + bounded + "%" : ""));
+        status.setText(detail == null ? "" : detail);
+        boolean running = "running".equals(stage);
+        boolean installed = "installed".equals(stage) || running;
+        installButton.setEnabled(!running);
+        startButton.setEnabled(installed && !running);
+        workspaceButton.setEnabled(running || installed);
+        installButton.setAlpha(running ? 0.5f : 1f);
+        startButton.setAlpha(startButton.isEnabled() ? 1f : 0.45f);
+        workspaceButton.setAlpha(workspaceButton.isEnabled() ? 1f : 0.45f);
     }
 
     private TextView text(String value, int size, int color) {
@@ -189,19 +239,42 @@ public final class MainActivity extends Activity {
         return view;
     }
 
-    private Button button(String value, int color) {
+    private Button button(String value, int fill, int foreground, int stroke) {
         Button button = new Button(this);
         button.setText(value);
-        button.setTextColor(Color.WHITE);
-        button.setTextSize(14);
+        button.setTextColor(foreground);
+        button.setTextSize(13);
         button.setAllCaps(false);
-        button.setBackgroundColor(color);
-        button.setPadding(dp(8), dp(12), dp(8), dp(12));
+        button.setLetterSpacing(0.06f);
+        button.setBackground(outline(fill, stroke, dp(1)));
         return button;
+    }
+
+    private View divider() {
+        View line = new View(this);
+        line.setBackgroundColor(STROKE);
+        return line;
+    }
+
+    private GradientDrawable outline(int fill, int stroke, int width) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fill);
+        drawable.setStroke(width, stroke);
+        return drawable;
     }
 
     private LinearLayout.LayoutParams matchWrap() {
         return new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+    }
+
+    private LinearLayout.LayoutParams matchWrapHeight(int height) {
+        return new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, height);
+    }
+
+    private LinearLayout.LayoutParams centered(int width, int height) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(width, height);
+        params.gravity = Gravity.CENTER_HORIZONTAL;
+        return params;
     }
 
     private LinearLayout.LayoutParams withMargins(LinearLayout.LayoutParams params, int left, int top, int right, int bottom) {

@@ -1,6 +1,6 @@
 {
   "architecture": "arm64-v8a",
   "rootfs_url": "https://github.com/goarxyz/goar-xyz/releases/download/goar-android-v1/goar-alpine-3.22.5-aarch64.tar.gz",
-  "rootfs_sha256": "53d3d7ef4deb0d045ed88a530dff3d5307cf96d02694774ecf1cdc5515b2ba36",
-  "rootfs_size": 446072064
+  "rootfs_sha256": "ee8a16a762ceabdc414853c4b0366c9cf1d1d50c908a29e94a335cb61f56b101",
+  "rootfs_size": 446072389
 }

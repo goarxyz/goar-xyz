@@ -4,6 +4,7 @@ import argparse
 import ast
 import asyncio
 import functools
+import hashlib
 import hmac
 import importlib.util
 import json
@@ -24,6 +25,18 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, Generator, TypeVar
+try:
+    from goar_vibe_core import GoarVibeCore
+except ModuleNotFoundError:
+    _core_spec = importlib.util.spec_from_file_location(
+        "goar_vibe_core", Path(__file__).with_name("goar_vibe_core.py")
+    )
+    if _core_spec is None or _core_spec.loader is None:
+        raise
+    _core_module = importlib.util.module_from_spec(_core_spec)
+    sys.modules["goar_vibe_core"] = _core_module
+    _core_spec.loader.exec_module(_core_module)
+    GoarVibeCore = _core_module.GoarVibeCore
 try:
     from rich.markup import escape as markup_escape
     from rich.text import Text as RichText
@@ -1221,7 +1234,7 @@ def bind_agent_session(agent: Any, session_id: str | None, *, model: str | None 
                 agent._session_tokens = 0
                 agent._operator_profile = "operator"
                 SESSION_STORE.save(sid, [], title="New chat", model=str(model or getattr(agent, "model", "") or ""), profile="operator", ui_messages=[])
-        agent._session_id = sid
+        agent.session_id = sid
         if model:
             try:
                 agent.model = model
@@ -9227,7 +9240,8 @@ class TriAgentLoop:
         self._scanner.scan()
 
         self._session_manager = SessionManager(HISTORY_DIR)
-        self._session_manager.create(model, name=self._session_id)
+        self._session_id = self._session_manager.create(model, name=self._session_id)
+        self._vibe_core = GoarVibeCore(CONFIG_DIR / "vibe_core", WORKSPACE_ROOT, self._session_id)
         self._perf = PerformanceTracker()
         self._reasoning_mode: str = "default"  
         self._memory = self._executor._memory
@@ -9259,6 +9273,9 @@ class TriAgentLoop:
     @session_id.setter
     def session_id(self, v: str) -> None:
         self._session_id = v
+        core = getattr(self, "_vibe_core", None)
+        if core is not None:
+            core.bind_session(v)
 
 
 
@@ -9286,6 +9303,18 @@ class TriAgentLoop:
         )
         base += "\n\nTools: use official tools[] (core set). list_tools for full catalog."
         base += operator_profile_prompt(getattr(self, "_operator_profile", "operator"))
+        try:
+            _core_state = self._vibe_core.status()
+            _plan_state = (_core_state.get("plan") or {}).get("state") or "none"
+            base += (
+                "\n\n## Local Runtime Control Plane\n"
+                f"Session `{_core_state.get('session_id')}` uses durable Vibe-style plans, checkpoints, workspace trust, and events. "
+                f"Plan state: `{_plan_state}`; active loops: {len(_core_state.get('loops') or [])}; "
+                f"trusted roots: {len(_core_state.get('trusted_roots') or [])}. "
+                "Treat profile policy and approved plan state as enforced runtime constraints."
+            )
+        except Exception:
+            pass
         memory_context = ""
         if self._history:
             last_user_msg = ""
@@ -9363,6 +9392,7 @@ class TriAgentLoop:
             if m.get("role") == "user" and m.get("content"):
                 last_user_msg = {"role": "user", "content": m["content"]}
                 break
+        snapshot = list(self._history)
         try:
             resp = await self._client.chat.completions.create(
                 model=self._model,
@@ -9376,14 +9406,19 @@ class TriAgentLoop:
                 max_tokens=2048,
                 temperature=0.3,
             )
-            summary = resp.choices[0].message.content or "(session summary unavailable)"
+            summary = (resp.choices[0].message.content or "").strip()
+            if not summary:
+                raise RuntimeError("compaction produced an empty summary")
         except Exception as _summary_exc:
-            
-            
-            logger.warning(f"auto_compact summary failed: {_summary_exc}")
-            summary = (
-                f"(Session compacted at {tokens_before:,} tokens — summary unavailable)"
-            )
+            # Vibe-style compaction is atomic: no failed summary may alter the
+            # live context or token accounting.
+            self._history = snapshot
+            logger.warning(f"auto_compact summary failed without mutating history: {_summary_exc}")
+            try:
+                self._vibe_core.events.append("compaction_failed", {"reason": type(_summary_exc).__name__})
+            except Exception:
+                pass
+            return
         new_history: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -9394,6 +9429,10 @@ class TriAgentLoop:
             new_history.append(last_user_msg)
         self._history = new_history
         self._session_tokens = 0
+        try:
+            self._vibe_core.events.append("compaction", {"tokens_before": tokens_before, "summary_digest": hashlib.sha256(summary.encode("utf-8")).hexdigest()})
+        except Exception:
+            pass
         await on_event(SessionCompactedEvent(len(summary), tokens_before))
 
     async def fetch_models(self) -> list[str]:
@@ -9510,9 +9549,12 @@ class TriAgentLoop:
         # Operator mode preserves legacy unattended GOAR behavior. Restricted
         # profiles never inherit the global auto-approve setting.
         auto_approve = bool(profile_info["auto_approve"]) and (True if AUTO_APPROVE else bool(auto_approve))
-        
-        
-        
+        core = self._vibe_core
+        lease_ok, lease_error = core.acquire()
+        if not lease_ok:
+            await on_event(AgentError(lease_error))
+            return
+
         self._recent_turn_sigs = []
         self._loop_break_counter = 0
         self._recent_assistant_texts = []
@@ -9525,8 +9567,23 @@ class TriAgentLoop:
             self._history = self._trim_history_preserving_pairs(self._history, max_h)
         self._history.append({"role": "user", "content": user_message})
         self._perf.start_turn()
+        core.begin_turn(f"turn_{int(time.time() * 1000)}")
+        core_decision, _core_config = core.before_turn(
+            profile=getattr(self, "_operator_profile", "operator"),
+            turns=len(self._perf._turns), max_turns=getattr(self, "_max_turns", MAX_AGENT_TURNS) or MAX_AGENT_TURNS,
+            tokens=getattr(self, "_session_tokens", 0), token_budget=SESSION_TOKEN_BUDGET,
+            compact_threshold=AUTO_COMPACT_THRESHOLD, history_size=len(self._history),
+        )
+        if core_decision.action == "stop":
+            await on_event(AgentError(core_decision.message or core_decision.reason))
+            core.seal_turn("middleware_stop")
+            core.release()
+            return
+        if core_decision.action == "inject" and core_decision.message:
+            self._history.append({"role": "system", "content": core_decision.message})
+        if core_decision.action == "compact":
+            await self._auto_compact(on_event)
 
-        
         if getattr(self, "_session_tokens", 0) >= SESSION_TOKEN_BUDGET:
             await on_event(AgentError(f"Session token budget exceeded ({SESSION_TOKEN_BUDGET}). Start a new session or /compact."))
             return
@@ -10027,6 +10084,9 @@ class TriAgentLoop:
                 async def exec_one(
                     name: str, args: dict[str, Any], call_id: str
                 ) -> tuple[str, str, str]:
+                    core.record_tool(name, args)
+                    core.capture_workspace_arg(args, after=False)
+                    core.hooks.dispatch("pre_tool", {"session_id": self._session_id, "name": name, "args": dict(args)})
                     allowed, denial = operator_profile_allows_tool(
                         getattr(self, "_operator_profile", "operator"), name
                     )
@@ -10035,7 +10095,6 @@ class TriAgentLoop:
                     elif name == "set_model":
                         result = self._executor._set_model(args)
                         await on_event(ModelSwitchedEvent(args.get("model", "")))
-                        return name, result, call_id
                     elif getattr(self, "_is_subagent", False) and name in SUBAGENT_BLOCKED_TOOLS:
                         result = f"[SUBAGENT POLICY DENIED] Tool {name!r} is not allowed for this sub-agent."
                     elif "_invalid_tool_args" in args:
@@ -10047,6 +10106,9 @@ class TriAgentLoop:
                             result = f"[TOOL TIMEOUT] {name} exceeded {MAX_TOOL_TIMEOUT:.0f}s and was cancelled."
                         except Exception as exc:
                             result = f"[TOOL FAILURE] {name}: {str(exc)[:1000]}"
+                    core.capture_workspace_arg(args, after=True)
+                    core.record_tool(name, args, result)
+                    core.hooks.dispatch("post_tool", {"session_id": self._session_id, "name": name, "result": str(result)[:4000]})
                     return name, result, call_id
 
                 results = await asyncio.gather(
@@ -10144,6 +10206,8 @@ class TriAgentLoop:
             tags=[self._task_type, "outcome", "success" if success else "failure"],
             source="agent_loop",
         )
+        core.seal_turn("agent_turn")
+        core.release()
         await on_event(AgentDone())
 
 
@@ -13117,13 +13181,13 @@ setTimeout(fetchTasks, 2000);
   }
 
   function novncUrl(){
-    const u = new URL('/novnc/vnc.html', ORIGIN);
+    // noVNC is served by the loopback-only websockify bridge. Flask/Gunicorn
+    // remains responsible for GOAR APIs but does not proxy WebSocket upgrades.
+    const u = new URL('http://' + location.hostname + ':6080/vnc.html');
     u.searchParams.set('autoconnect','true');
     u.searchParams.set('reconnect','true');
     u.searchParams.set('resize','scale');
     u.searchParams.set('path','websockify');
-    u.searchParams.set('host', location.hostname);
-    if (location.port) u.searchParams.set('port', location.port);
     return u.toString();
   }
 
@@ -14299,7 +14363,7 @@ class VncDesktopStack:
         
         self._log_handles: list[Any] = []
         self.lib_path = "/workspace/lib"
-        self.xvnc_bin = self._find(["/workspace/bin/Xvnc", "Xvnc", "Xtigervnc"])
+        self.xvnc_bin = self._find(["/workspace/bin/Xvnc", "/usr/bin/Xvnc", "Xvnc", "Xtigervnc"])
         self.chrome_bin = self._find_glob([
             "/opt/pw-browsers/chromium-1234/chrome-linux64/chrome",
             "/opt/pw-browsers/chromium-*/chrome-linux64/chrome",
@@ -14312,24 +14376,35 @@ class VncDesktopStack:
         ])
 
     @staticmethod
-    def _find(cands: list[str]) -> str | None:
+    def _is_guest_executable(path: str) -> bool:
+        if not os.path.isfile(path):
+            return False
+        if os.access(path, os.X_OK):
+            return True
+        # Under QEMU-backed PRoot, Python's faccessat can report false for a
+        # valid aarch64 guest executable even though /bin/sh executes it. The
+        # rootfs marker confines this compatibility rule to the PRoot guest.
+        return Path("/etc/goar/host-rootfs-path").is_file() and path.startswith("/")
+
+    @classmethod
+    def _find(cls, cands: list[str]) -> str | None:
         for c in cands:
-            if os.path.isfile(c) and os.access(c, os.X_OK):
+            if cls._is_guest_executable(c):
                 return c
             w = shutil.which(c)
             if w:
                 return w
         return None
 
-    @staticmethod
-    def _find_glob(patterns: list[str]) -> str | None:
+    @classmethod
+    def _find_glob(cls, patterns: list[str]) -> str | None:
         import glob as _g
         for p in patterns:
             if "*" in p:
                 hits = sorted(_g.glob(p))
-                if hits and os.access(hits[0], os.X_OK):
+                if hits and cls._is_guest_executable(hits[0]):
                     return hits[0]
-            elif os.path.isfile(p) and os.access(p, os.X_OK):
+            elif cls._is_guest_executable(p):
                 return p
         return None
 
@@ -14407,7 +14482,7 @@ class VncDesktopStack:
                 if ok:
                     break
             
-            self.xvnc_bin = self._find(["/workspace/bin/Xvnc", "Xvnc", "Xtigervnc"])
+            self.xvnc_bin = self._find(["/workspace/bin/Xvnc", "/usr/bin/Xvnc", "Xvnc", "Xtigervnc"])
 
         
         if not self.chrome_bin:
@@ -14441,7 +14516,7 @@ class VncDesktopStack:
     def _start_websockify(self, env: dict[str, str]) -> bool:
         if self._port_open(self.ws_port):
             return True
-        bridge = shutil.which("websockify")
+        bridge = self._find(["/usr/bin/websockify", "websockify"])
         if not bridge:
             self.error = "websockify is unavailable after desktop bootstrap"
             return False
@@ -14459,7 +14534,7 @@ class VncDesktopStack:
                     "-t", f"127.0.0.1:{self.rfb_port}",
                 ]
             else:
-                command = [bridge, "--web", str(self.novnc_root), str(self.ws_port), f"127.0.0.1:{self.rfb_port}"]
+                command = [bridge, "--web", str(self.novnc_root), f"127.0.0.1:{self.ws_port}", f"127.0.0.1:{self.rfb_port}"]
             log = open("/tmp/goar-websockify.log", "a")
             self._log_handles.append(log)
             proc = subprocess_module.Popen(
@@ -16089,7 +16164,7 @@ def create_flask_app() -> "Flask":
             tokens=int(body.get("tokens") or getattr(agent, "_session_tokens", 0) or 0),
             ui_messages=ui_messages,
         )
-        agent._session_id = sid
+        agent.session_id = sid
         return jsonify({"ok": True, "id": sid, "path": str(p), "title": (SESSION_STORE.load(sid) or {}).get("title")})
 
     @app.post("/v1/sessions/resume")
@@ -16141,6 +16216,161 @@ def create_flask_app() -> "Flask":
         ok_del = SESSION_STORE.delete(session_id)
         return jsonify({"ok": ok_del})
 
+    def _vibe_agent_for(session_id: str | None = None):
+        agent = get_or_create_agent(None)
+        requested = str(session_id or "").strip()
+        if requested and requested != getattr(agent, "session_id", ""):
+            bind_agent_session(agent, requested)
+        return agent
+
+    @app.get("/v1/core/status")
+    def vibe_core_status_api():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        agent = _vibe_agent_for(request.args.get("session_id"))
+        return jsonify({"ok": True, "core": agent._vibe_core.status(), "profile": getattr(agent, "_operator_profile", "operator")})
+
+    @app.get("/v1/core/config")
+    @app.post("/v1/core/config")
+    def vibe_core_config_api():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        body = request.get_json(force=True, silent=True) or {}
+        agent = _vibe_agent_for(body.get("session_id") or request.args.get("session_id"))
+        if request.method == "GET":
+            resolved = agent._vibe_core.resolve_config(
+                profile=getattr(agent, "_operator_profile", "operator"),
+                max_turns=getattr(agent, "_max_turns", MAX_AGENT_TURNS) or MAX_AGENT_TURNS,
+                token_budget=SESSION_TOKEN_BUDGET,
+                compact_threshold=AUTO_COMPACT_THRESHOLD,
+            )
+            return jsonify({"ok": True, "session": agent._vibe_core.session_config(), "resolved": resolved.values, "origins": resolved.origins, "fingerprint": resolved.fingerprint})
+        values = body.get("values")
+        if not isinstance(values, dict):
+            return jsonify({"error": "values must be an object"}), 400
+        try:
+            saved = agent._vibe_core.update_session_config(values)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "session": saved})
+
+    @app.get("/v1/core/events")
+    def vibe_core_events_api():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        agent = _vibe_agent_for(request.args.get("session_id"))
+        try:
+            limit = int(request.args.get("limit") or 200)
+        except ValueError:
+            limit = 200
+        return jsonify({"ok": True, "events": agent._vibe_core.events.read(request.args.get("after"), limit)})
+
+    @app.get("/v1/core/checkpoints")
+    def vibe_core_checkpoints_api():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        agent = _vibe_agent_for(request.args.get("session_id"))
+        return jsonify({"ok": True, "checkpoints": agent._vibe_core.ledger.events()})
+
+    @app.post("/v1/core/checkpoints/<checkpoint_id>/review")
+    def vibe_core_checkpoint_review_api(checkpoint_id: str):
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        body = request.get_json(force=True, silent=True) or {}
+        agent = _vibe_agent_for(body.get("session_id"))
+        try:
+            review = agent._vibe_core.ledger.review(checkpoint_id, str(body.get("decision") or ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        agent._vibe_core.events.append("checkpoint_review", {"checkpoint_id": checkpoint_id, "decision": review["decision"], "restored": review["restored"]})
+        return jsonify({"ok": True, "review": review})
+
+    @app.get("/v1/core/plan")
+    @app.post("/v1/core/plan")
+    def vibe_core_plan_api():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        body = request.get_json(force=True, silent=True) or {}
+        agent = _vibe_agent_for(body.get("session_id") or request.args.get("session_id"))
+        plan = agent._vibe_core.plan
+        if request.method == "GET":
+            current = plan.load()
+            return jsonify({"ok": True, "plan": current.to_dict() if current else None})
+        action = str(body.get("action") or "create")
+        try:
+            if action == "create":
+                steps = body.get("steps") or []
+                if not isinstance(steps, list):
+                    raise ValueError("steps must be a list")
+                current = plan.create(str(body.get("title") or "GOAR plan"), [str(step) for step in steps])
+            elif action == "transition":
+                current = plan.transition(str(body.get("state") or ""), str(body.get("note") or ""))
+            elif action == "step":
+                current = plan.update_step(str(body.get("id") or ""), str(body.get("status") or ""), str(body.get("note") or ""))
+            else:
+                return jsonify({"error": "unknown plan action"}), 400
+            agent._vibe_core.events.append("plan_api", {"action": action, "plan_id": current.id, "state": current.state})
+            return jsonify({"ok": True, "plan": current.to_dict()})
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get("/v1/core/workspace-trust")
+    @app.post("/v1/core/workspace-trust")
+    def vibe_core_workspace_trust_api():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        body = request.get_json(force=True, silent=True) or {}
+        agent = _vibe_agent_for(body.get("session_id") or request.args.get("session_id"))
+        trust = agent._vibe_core.trust
+        if request.method == "GET":
+            return jsonify({"ok": True, "roots": [str(root) for root in trust.roots()]})
+        path = str(body.get("path") or "").strip()
+        if not path:
+            return jsonify({"error": "path is required"}), 400
+        action = str(body.get("action") or "trust")
+        try:
+            roots = trust.trust(path) if action == "trust" else trust.revoke(path) if action == "revoke" else None
+        except OSError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if roots is None:
+            return jsonify({"error": "action must be trust or revoke"}), 400
+        agent._vibe_core.events.append("workspace_trust", {"action": action, "path": str(Path(path).resolve())})
+        return jsonify({"ok": True, "roots": roots})
+
+    @app.get("/v1/core/loops")
+    @app.post("/v1/core/loops")
+    def vibe_core_loops_api():
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        body = request.get_json(force=True, silent=True) or {}
+        agent = _vibe_agent_for(body.get("session_id") or request.args.get("session_id"))
+        if request.method == "GET":
+            return jsonify({"ok": True, "loops": agent._vibe_core.loops.list()})
+        try:
+            loop = agent._vibe_core.loops.create(str(body.get("interval") or ""), str(body.get("prompt") or ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        agent._vibe_core.events.append("loop_created", {"id": loop["id"], "interval_seconds": loop["interval_seconds"]})
+        return jsonify({"ok": True, "loop": loop}), 201
+
+    @app.delete("/v1/core/loops/<loop_id>")
+    def vibe_core_loop_delete_api(loop_id: str):
+        ok, err = _check_auth()
+        if not ok:
+            return jsonify({"error": err}), 401
+        agent = _vibe_agent_for(request.args.get("session_id"))
+        deleted = agent._vibe_core.loops.delete(loop_id)
+        if deleted:
+            agent._vibe_core.events.append("loop_deleted", {"id": loop_id})
+        return jsonify({"ok": deleted})
 
 
     @app.get("/v1/domains")

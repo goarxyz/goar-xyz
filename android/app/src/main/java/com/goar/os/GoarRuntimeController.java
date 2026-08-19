@@ -105,8 +105,9 @@ public final class GoarRuntimeController {
         report(reporter, "manifest", 0, "Downloading rootfs manifest");
         JSONObject manifest = new JSONObject(readText(manifestUrl, 256 * 1024));
         String architecture = manifest.optString("architecture", "");
-        if (!"arm64-v8a".equals(architecture)) {
-            throw new IOException("This APK requires an arm64-v8a rootfs, received: " + architecture);
+        String expectedArchitecture = BuildConfig.TARGET_ROOTFS_ARCH;
+        if (!expectedArchitecture.equals(architecture)) {
+            throw new IOException("This APK requires a " + expectedArchitecture + " rootfs, received: " + architecture);
         }
         String rootfsUrl = manifest.getString("rootfs_url");
         String expectedSha256 = manifest.getString("rootfs_sha256").toLowerCase(Locale.US);
@@ -306,6 +307,7 @@ public final class GoarRuntimeController {
              GZIPInputStream gzip = new GZIPInputStream(file)) {
             String pendingLongName = null;
             String pendingLongLink = null;
+            List<PendingHardLink> pendingHardLinks = new ArrayList<>();
             while (true) {
                 readFully(gzip, header, 0, header.length);
                 consumed += header.length;
@@ -347,6 +349,7 @@ public final class GoarRuntimeController {
                 pendingLongName = null;
                 pendingLongLink = null;
                 File output = safeTarFile(destination, name);
+                boolean deferredHardLink = false;
                 if (type == '5') {
                     if (!output.isDirectory() && !output.mkdirs()) {
                         throw new IOException("Could not create directory " + name);
@@ -365,7 +368,15 @@ public final class GoarRuntimeController {
                     if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
                         throw new IOException("Could not create parent for " + name);
                     }
-                    Files.createLink(output.toPath(), target.toPath());
+                    // GNU tar may record a hard link before its regular-file
+                    // target. Android's Files.createLink cannot create such a
+                    // forward reference, so finish it after the archive pass.
+                    if (target.isFile()) {
+                        materializeHardLink(output, target, mode);
+                    } else {
+                        pendingHardLinks.add(new PendingHardLink(name, output, target, mode));
+                        deferredHardLink = true;
+                    }
                 } else if (type == 0 || type == '0') {
                     File parent = output.getParentFile();
                     if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
@@ -384,11 +395,57 @@ public final class GoarRuntimeController {
                     skipExactly(gzip, padding);
                     consumed += padding;
                 }
-                setMode(output, mode, type == '5');
+                if (!deferredHardLink) {
+                    setMode(output, mode, type == '5');
+                }
                 int percent = archiveLength > 0 ? (int) Math.min(99, consumed * 100L / archiveLength) : 0;
                 report(reporter, "extract", percent, "Installing " + name);
             }
+            materializePendingHardLinks(pendingHardLinks);
         }
+    }
+
+    private static final class PendingHardLink {
+        final String archiveName;
+        final File output;
+        final File target;
+        final int mode;
+
+        PendingHardLink(String archiveName, File output, File target, int mode) {
+            this.archiveName = archiveName;
+            this.output = output;
+            this.target = target;
+            this.mode = mode;
+        }
+    }
+
+    private static void materializePendingHardLinks(List<PendingHardLink> pending) throws IOException {
+        for (PendingHardLink link : pending) {
+            if (!link.target.isFile()) {
+                throw new IOException("Hard-link target was not present in rootfs archive: " + link.archiveName);
+            }
+            materializeHardLink(link.output, link.target, link.mode);
+        }
+    }
+
+    private static void materializeHardLink(File output, File target, int mode) throws IOException {
+        Files.deleteIfExists(output.toPath());
+        try {
+            Files.createLink(output.toPath(), target.toPath());
+        } catch (UnsupportedOperationException | IOException linkFailure) {
+            // App-private filesystems normally support hard links. If a device
+            // filesystem rejects them, preserve the archive payload safely by
+            // making a regular copy instead of failing an otherwise valid rootfs.
+            try (InputStream input = new BufferedInputStream(new FileInputStream(target));
+                 BufferedOutputStream stream = new BufferedOutputStream(new FileOutputStream(output))) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    stream.write(buffer, 0, read);
+                }
+            }
+        }
+        setMode(output, mode, false);
     }
 
     private static void readFully(InputStream stream, byte[] buffer, int offset, int length) throws IOException {

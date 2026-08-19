@@ -98,6 +98,47 @@ class GoarOsIsolationTests(unittest.TestCase):
         self.assertFalse(self.goar.operator_profile_allows_tool("accept-edits", "bash")[0])
         self.assertFalse(self.goar.operator_profile_allows_tool("explore", "web_fetch")[0])
 
+    def test_vibe_core_local_apis_persist_plan_loops_trust_and_events(self) -> None:
+        session_id = "vibe_core_api_test"
+        core = self.goar.GoarVibeCore(
+            self.goar.CONFIG_DIR / "vibe_core", self.workspace, session_id, owner="api-test"
+        )
+        agent = SimpleNamespace(
+            _vibe_core=core,
+            _operator_profile="operator",
+            session_id=session_id,
+            _session_id=session_id,
+            _history=[],
+            _session_tokens=0,
+            model="test-model",
+        )
+        with patch.object(self.goar, "get_or_create_agent", return_value=agent):
+            created = self.client.post(
+                "/v1/core/plan",
+                json={"action": "create", "title": "Validate release", "steps": ["Extract", "Start"]},
+            )
+            self.assertEqual(created.status_code, 200)
+            self.assertEqual(created.get_json()["plan"]["state"], "draft")
+            approved = self.client.post("/v1/core/plan", json={"action": "transition", "state": "approved"})
+            self.assertEqual(approved.status_code, 200)
+            configured = self.client.post("/v1/core/config", json={"values": {"max_turns": 7, "compact_threshold": 99}})
+            self.assertEqual(configured.status_code, 200)
+            config_view = self.client.get("/v1/core/config").get_json()
+            self.assertEqual(config_view["resolved"]["max_turns"], 7)
+            self.assertEqual(config_view["origins"]["max_turns"], "session_override")
+            loop = self.client.post("/v1/core/loops", json={"interval": "30s", "prompt": "health check"})
+            self.assertEqual(loop.status_code, 201)
+            self.assertEqual(self.client.get("/v1/core/loops").get_json()["loops"][0]["prompt"], "health check")
+            trusted = self.client.post(
+                "/v1/core/workspace-trust",
+                json={"action": "trust", "path": str(self.workspace)},
+            )
+            self.assertEqual(trusted.status_code, 200)
+            status = self.client.get("/v1/core/status")
+            self.assertEqual(status.status_code, 200)
+            self.assertEqual(status.get_json()["core"]["plan"]["state"], "approved")
+            self.assertGreaterEqual(len(self.client.get("/v1/core/events").get_json()["events"]), 2)
+
     def test_operator_profile_api_persists_per_session(self) -> None:
         agent = SimpleNamespace(
             _operator_profile="operator",
