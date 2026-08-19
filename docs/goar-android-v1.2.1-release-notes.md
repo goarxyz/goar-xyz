@@ -1,10 +1,10 @@
-# GOAR OS Android v1.2.0 — Premium Operator Console
+# GOAR OS Android v1.2.1 — PAX Extractor Correction
 
-This release fixes the Kali rootfs installation failure, applies the GOAR mark as the installed Android launcher icon, and evolves the application into a restrained monochrome native operator console. It retains the compact APK plus separately downloaded, checksum-verified Kali ARM64 PRoot backend.
+This upgrade fixes the remaining Kali rootfs installation failure caused by POSIX PAX extended paths. It retains the GOAR launcher icon, restrained monochrome native operator console, and compact APK plus separately downloaded, checksum-verified Kali ARM64 PRoot backend introduced in v1.2.0.
 
 ## What changed
 
-| Area | v1.2.0 behavior |
+| Area | v1.2.1 behavior |
 |---|---|
 | Rootfs installer | Accepts valid literal-backslash Linux filenames such as Kali systemd `\\x2d` unit names and POSIX PAX extended paths used by long Kali Python-package filenames, while retaining canonical path-containment checks against traversal. |
 | Launcher icon | The actual Android application and round icon use the GOAR monochrome mark at every Android launcher density. |
@@ -25,14 +25,14 @@ The Direct Terminal is an operator shell. Agent Chat requires the operator to co
 
 | Asset | SHA-256 | Size |
 |---|---|---:|
-| `goar-os-v1.2.0-arm64-v8a.apk` | `884e3250165cd224ea0e8193f3e4d9b2b1a4caae786445210f3d2ef44d2aa112` | 185,099 bytes |
+| `goar-os-v1.2.1-arm64-v8a.apk` | `e2636f20e53d3f0bf888f10dba900a10bdc22de7d41a811feb3f1bff3ece2aa8` | 185,105 bytes |
 | `goar-kali-terminal-arm64.tar.gz` | `f688825035b2c8e287367cd575fe5b2d7217dffc1809ff72af2f4a83d703cf32` | 322,088,301 bytes |
 
 ## Validation completed
 
 The Kali release archive was reproducibly rebuilt, independently extracted, and run under ARM64 PRoot emulation. Guest validation passed `goarctl status`, direct agent-launcher help with duplicate loop startup disabled, and outbound HTTPS. The archive audit verified the durable-loop policy, the valid systemd filename that caused the prior Android error, and the absence of traversal entries.
 
-The repository regression suite passed all **29 tests**, including the exact long Kali JSON-schema PAX path that previously truncated into a directory on Android. The signed APK passed v2 and v3 signature verification, declares package version `1.2.0` with version code `6`, restricts native code to `arm64-v8a`, includes the complete Kai-model PRoot payload plus `libgoar_terminal_jni.so`, and contains Android launcher icon resources at every standard density.
+The repository regression suite passed all **29 tests**, including the exact long Kali JSON-schema PAX path that previously truncated into a directory on Android. The signed APK passed v2 and v3 signature verification, declares package version `1.2.1` with version code `7`, restricts native code to `arm64-v8a`, includes the complete Kai-model PRoot payload plus `libgoar_terminal_jni.so`, and contains Android launcher icon resources at every standard density.
 
 ## Remaining limitation
 
