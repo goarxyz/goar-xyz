@@ -435,9 +435,13 @@ public final class GoarRuntimeController {
                 // long schema paths; treating the next header alone truncates a
                 // regular-file path into a directory (for example, `.../voca`).
                 if (type == 'L' || type == 'K' || type == 'x' || type == 'g') {
-                    String extendedValue = (type == 'x' || type == 'g')
-                            ? readPaxText(gzip, size)
-                            : readTarText(gzip, size);
+                    String extendedValue = null;
+                    java.util.Map<String, String> pax = null;
+                    if (type == 'x' || type == 'g') {
+                        pax = readPaxAttributes(gzip, size);
+                    } else {
+                        extendedValue = readTarText(gzip, size);
+                    }
                     consumed += size;
                     long padding = (512 - (size % 512)) % 512;
                     if (padding > 0) {
@@ -449,7 +453,6 @@ public final class GoarRuntimeController {
                     } else if (type == 'K') {
                         pendingLongLink = extendedValue;
                     } else {
-                        java.util.Map<String, String> pax = parsePaxAttributes(extendedValue);
                         if (pax.containsKey("path")) pendingLongName = pax.get("path");
                         if (pax.containsKey("linkpath")) pendingLongLink = pax.get("linkpath");
                     }
@@ -584,35 +587,41 @@ public final class GoarRuntimeController {
         return new String(value, 0, end, StandardCharsets.UTF_8);
     }
 
-    private static String readPaxText(InputStream input, long length) throws IOException {
+    private static java.util.Map<String, String> readPaxAttributes(InputStream input, long length) throws IOException {
         if (length < 0 || length > 1024 * 1024) {
             throw new IOException("Unexpectedly large PAX extended-path record");
         }
         byte[] value = new byte[(int) length];
         readFully(input, value, 0, value.length);
-        return new String(value, StandardCharsets.UTF_8);
+        return parsePaxAttributes(value);
     }
 
-    private static java.util.Map<String, String> parsePaxAttributes(String value) throws IOException {
+    private static java.util.Map<String, String> parsePaxAttributes(byte[] value) throws IOException {
         java.util.LinkedHashMap<String, String> attributes = new java.util.LinkedHashMap<>();
         int position = 0;
-        while (position < value.length()) {
-            int separator = value.indexOf(' ', position);
-            if (separator < 0) break;
+        while (position < value.length) {
+            int separator = position;
+            while (separator < value.length && value[separator] != ' ') separator++;
+            if (separator == value.length) throw new IOException("Malformed PAX extended header");
             long recordLength;
             try {
-                recordLength = Long.parseLong(value.substring(position, separator));
+                recordLength = Long.parseLong(new String(value, position, separator - position, StandardCharsets.US_ASCII));
             } catch (NumberFormatException error) {
                 throw new IOException("Malformed PAX extended header", error);
             }
-            if (recordLength <= separator - position || recordLength > value.length() - position) {
+            if (recordLength <= separator - position + 1 || recordLength > value.length - position) {
                 throw new IOException("Invalid PAX extended header length");
             }
             int recordEnd = position + (int) recordLength;
-            String record = value.substring(separator + 1, recordEnd);
-            if (record.endsWith("\n")) record = record.substring(0, record.length() - 1);
-            int equals = record.indexOf('=');
-            if (equals > 0) attributes.put(record.substring(0, equals), record.substring(equals + 1));
+            int dataEnd = recordEnd;
+            if (value[dataEnd - 1] == '\n') dataEnd--;
+            int equals = separator + 1;
+            while (equals < dataEnd && value[equals] != '=') equals++;
+            if (equals > separator + 1 && equals < dataEnd) {
+                String key = new String(value, separator + 1, equals - separator - 1, StandardCharsets.US_ASCII);
+                String recordValue = new String(value, equals + 1, dataEnd - equals - 1, StandardCharsets.UTF_8);
+                attributes.put(key, recordValue);
+            }
             position = recordEnd;
         }
         return attributes;
