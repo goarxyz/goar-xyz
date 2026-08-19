@@ -28,7 +28,7 @@ The Android front end is a real terminal session, not a scrollable command-outpu
 | Output | The renderer keeps the product deliberately monochrome while accepting the terminal control sequences used by Bash and VibeHack. |
 | Lifecycle | Each Direct Terminal, Agent Chat, Control, or Package workspace owns and closes only its own PTY child. The foreground service separately owns the durable loop-daemon PRoot child, so no web server or browser lifecycle exists. |
 
-The implementation uses a dedicated Android JNI terminal bridge informed by ptyctl behavior and contains no WebView, HTTP bridge, Flask process, VNC/noVNC component, or browser dependency. The extractor accepts literal backslashes in valid Linux filenames—needed for Kali systemd `\\x2d` unit names—while retaining canonical root-directory containment checks to reject traversal.
+The implementation uses a dedicated Android JNI terminal bridge informed by ptyctl behavior and contains no WebView, HTTP bridge, Flask process, VNC/noVNC component, or browser dependency. The extractor accepts literal backslashes in valid Linux filenames—needed for Kali systemd `\\x2d` unit names—and POSIX PAX extended paths used by long Python-package entries, while retaining canonical root-directory containment checks to reject traversal.
 
 ## Operator Console Separation
 

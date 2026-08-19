@@ -430,13 +430,14 @@ public final class GoarRuntimeController {
                 int mode = (int) tarNumber(header, 100, 8);
                 byte type = header[156];
 
-                // GNU tar writes an L/K metadata record before any path or link
-                // target longer than the fixed USTAR header fields. The prior
-                // implementation skipped this record, then extracted the next
-                // file using its truncated path, which collided with directories
-                // such as Python __pycache__ in the full Alpine rootfs.
-                if (type == 'L' || type == 'K') {
-                    String extendedValue = readTarText(gzip, size);
+                // GNU L/K and POSIX PAX x/g records carry paths that exceed the
+                // fixed USTAR header. Kali's Python packages use PAX records for
+                // long schema paths; treating the next header alone truncates a
+                // regular-file path into a directory (for example, `.../voca`).
+                if (type == 'L' || type == 'K' || type == 'x' || type == 'g') {
+                    String extendedValue = (type == 'x' || type == 'g')
+                            ? readPaxText(gzip, size)
+                            : readTarText(gzip, size);
                     consumed += size;
                     long padding = (512 - (size % 512)) % 512;
                     if (padding > 0) {
@@ -445,8 +446,12 @@ public final class GoarRuntimeController {
                     }
                     if (type == 'L') {
                         pendingLongName = extendedValue;
-                    } else {
+                    } else if (type == 'K') {
                         pendingLongLink = extendedValue;
+                    } else {
+                        java.util.Map<String, String> pax = parsePaxAttributes(extendedValue);
+                        if (pax.containsKey("path")) pendingLongName = pax.get("path");
+                        if (pax.containsKey("linkpath")) pendingLongLink = pax.get("linkpath");
                     }
                     continue;
                 }
@@ -577,6 +582,40 @@ public final class GoarRuntimeController {
             end--;
         }
         return new String(value, 0, end, StandardCharsets.UTF_8);
+    }
+
+    private static String readPaxText(InputStream input, long length) throws IOException {
+        if (length < 0 || length > 1024 * 1024) {
+            throw new IOException("Unexpectedly large PAX extended-path record");
+        }
+        byte[] value = new byte[(int) length];
+        readFully(input, value, 0, value.length);
+        return new String(value, StandardCharsets.UTF_8);
+    }
+
+    private static java.util.Map<String, String> parsePaxAttributes(String value) throws IOException {
+        java.util.LinkedHashMap<String, String> attributes = new java.util.LinkedHashMap<>();
+        int position = 0;
+        while (position < value.length()) {
+            int separator = value.indexOf(' ', position);
+            if (separator < 0) break;
+            long recordLength;
+            try {
+                recordLength = Long.parseLong(value.substring(position, separator));
+            } catch (NumberFormatException error) {
+                throw new IOException("Malformed PAX extended header", error);
+            }
+            if (recordLength <= separator - position || recordLength > value.length() - position) {
+                throw new IOException("Invalid PAX extended header length");
+            }
+            int recordEnd = position + (int) recordLength;
+            String record = value.substring(separator + 1, recordEnd);
+            if (record.endsWith("\n")) record = record.substring(0, record.length() - 1);
+            int equals = record.indexOf('=');
+            if (equals > 0) attributes.put(record.substring(0, equals), record.substring(equals + 1));
+            position = recordEnd;
+        }
+        return attributes;
     }
 
     private static void copyExactly(InputStream input, BufferedOutputStream output, long length) throws IOException {

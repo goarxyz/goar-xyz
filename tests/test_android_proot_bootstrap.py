@@ -100,6 +100,11 @@ class AndroidProotBootstrapContractTests(unittest.TestCase):
         self.assertIn('name.contains("../")', self.source)
         self.assertIn("getCanonicalFile", self.source)
 
+    def test_kali_pax_extended_paths_are_supported(self) -> None:
+        self.assertIn("type == 'x'", self.source)
+        self.assertIn("parsePaxAttributes", self.source)
+        self.assertIn('pax.containsKey("path")', self.source)
+
     def test_manifest_pins_existing_kali_terminal_archive(self) -> None:
         manifest = json.loads(ROOTFS_MANIFEST.read_text(encoding="utf-8"))
         self.assertEqual(manifest["architecture"], "arm64-v8a")
@@ -125,6 +130,7 @@ class AndroidProotBootstrapContractTests(unittest.TestCase):
         }
         self.assertTrue(required.issubset(members), sorted(required - members))
         self.assertIn("etc/systemd/user/app-org.kde.plasma\\x2dwelcome@autostart.service", members)
+        self.assertIn("opt/vibehack/.venv/lib/python3.13/site-packages/jsonschema_specifications/schemas/draft201909/vocabularies/applicator", members)
         forbidden = ("flask", "novnc", "websockify", "chromium")
         self.assertFalse(any(any(term in member.lower() for term in forbidden) for member in members))
 
