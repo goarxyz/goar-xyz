@@ -1,0 +1,7 @@
+{
+  "architecture": "arm64-v8a",
+  "rootfs_url": "https://github.com/goarxyz/goar-xyz/releases/download/goar-alpine-vibe-v1/goar-alpine-vibe-3.24.1-aarch64.tar.gz",
+  "rootfs_sha256": "407810d6d63703c7089e44a84cb68d1d8055747641a33675613be03eecf5ebad",
+  "rootfs_size": 389770281,
+  "version": "alpine-private-vibe-v1.0.0"
+}

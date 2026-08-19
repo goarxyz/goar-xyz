@@ -1,0 +1,18 @@
+#!/bin/sh
+# Direct terminal launcher for the Alpine Private Vibe edition.
+set -eu
+
+export HOME="${HOME:-/data/goar}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export TERM="${TERM:-xterm-256color}"
+export PYTHONUNBUFFERED=1
+
+mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" /data/goar/workspace
+workspace="${GOAR_WORKSPACE:-/data/goar/workspace}"
+mkdir -p "$workspace"
+cd "$workspace"
+
+# Vibe performs first-run onboarding itself when no API credentials exist.
+exec /opt/goar-alpine-vibe/.venv/bin/vibe "$@"

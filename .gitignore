@@ -87,3 +87,25 @@ test-output*.log
 proot/kali-terminal-rootfs-build-*.log
 release-assets/
 staged-diff-check.log
+
+# Raw upstream Mistral Vibe checkout is an unmodified local audit reference.
+vendor/
+
+# Alpine Private Vibe generated caches and rootfs release artifacts.
+proot/alpine-vibe-cache/
+proot/alpine-vibe-rootfs/
+proot/goar-alpine-vibe-*.tar.gz
+proot/goar-alpine-vibe-*.tar.gz.sha256
+
+# Separate Alpine Android project local build products and signing material.
+android-alpine/.gradle/
+android-alpine/local.properties
+android-alpine/release-signing.properties
+android-alpine/*.jks
+android-alpine/app/build/
+android-alpine/app/.cxx/
+android-alpine/.idea/
+
+# Existing Kali release payload remains a published binary asset, not source.
+proot/goar-kali-terminal-*.tar.gz
+proot/goar-kali-terminal-*.tar.gz.sha256
