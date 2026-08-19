@@ -162,15 +162,15 @@ public final class GoarRuntimeController {
         // locate its bundled Node driver when PRoot launches it.
         writeText(new File(rootfsDir, "etc/goar/host-rootfs-path"), rootfsDir.getAbsolutePath() + "\n");
         File nativeDirectory = new File(context.getApplicationInfo().nativeLibraryDir);
-        File proot = new File(nativeDirectory, "libgoar_proot.so");
-        File loader = new File(nativeDirectory, "libgoar_loader.so");
+        // This matching four-file set is built from the Kai-pinned Termux
+        // PRoot revision: primary executable, arm64 loader, armv7 tracee
+        // loader, and talloc. Do not substitute the old libgoar_* payload.
+        File proot = new File(nativeDirectory, "libproot.so");
+        File loader = new File(nativeDirectory, "libproot-loader.so");
+        File loader32 = new File(nativeDirectory, "libproot-loader32.so");
         File talloc = new File(nativeDirectory, "libtalloc.so");
-        File shmem = new File(nativeDirectory, "libandroid-shmem.so");
-        if (!proot.canExecute() || !loader.canExecute()) {
-            throw new IOException("The PRoot bootstrap is unavailable for this device ABI");
-        }
-        if (!talloc.isFile() || !shmem.isFile()) {
-            throw new IOException("The PRoot bootstrap is missing required native libraries");
+        if (!proot.canExecute() || !loader.canExecute() || !loader32.canExecute() || !talloc.isFile()) {
+            throw new IOException("The complete dual-loader PRoot bootstrap is unavailable for this device ABI");
         }
         File runtimeLibraryDirectory = prepareNativeRuntimeLibraries(talloc);
 
@@ -214,9 +214,9 @@ public final class GoarRuntimeController {
         builder.environment().put("TMPDIR", "/tmp");
         builder.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
         builder.environment().put("PROOT_LOADER", loader.getAbsolutePath());
-        // The versioned talloc filename is in app-private storage; Android's
-        // extracted native directory retains libandroid-shmem.so for this
-        // legacy Termux PRoot build. Both locations must remain visible.
+        // Android's extracted JNI library keeps the primary executable and
+        // both tracee loaders runnable. The app-private directory supplies the
+        // versioned talloc soname requested by the matching PRoot binary.
         builder.environment().put(
                 "LD_LIBRARY_PATH",
                 runtimeLibraryDirectory.getAbsolutePath() + File.pathSeparator + nativeDirectory.getAbsolutePath()
