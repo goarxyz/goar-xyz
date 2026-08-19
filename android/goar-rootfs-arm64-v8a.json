@@ -1,6 +1,7 @@
 {
   "architecture": "arm64-v8a",
-  "rootfs_url": "https://github.com/goarxyz/goar-xyz/releases/download/goar-android-v1/goar-alpine-3.22.5-aarch64.tar.gz",
-  "rootfs_sha256": "ee8a16a762ceabdc414853c4b0366c9cf1d1d50c908a29e94a335cb61f56b101",
-  "rootfs_size": 446072389
+  "rootfs_url": "https://github.com/goarxyz/goar-xyz/releases/download/goar-android-v1/goar-kali-terminal-arm64.tar.gz",
+  "rootfs_sha256": "7a8b7db631ee9a203d66ae57023c23916bbdf43e0b92f78c8a336ce9c208324c",
+  "rootfs_size": 322092086,
+  "version": "kali-terminal-v1.1.0"
 }

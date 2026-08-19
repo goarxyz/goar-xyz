@@ -20,7 +20,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.URL;
@@ -59,14 +58,12 @@ public final class GoarRuntimeController {
     private final File workspaceDir;
     private final File tmpDir;
     private final File cacheDir;
-    private final File logFile;
     private final File resolverFile;
     // Android removes version suffixes from packaged JNI filenames. PRoot is
     // linked against libtalloc.so.2, so materialize that exact soname below the
     // app-private GOAR directory before launching it.
     private final File nativeRuntimeDir;
     private final SharedPreferences preferences;
-    private Process process;
 
     public GoarRuntimeController(Context context) {
         this.context = context.getApplicationContext();
@@ -76,7 +73,6 @@ public final class GoarRuntimeController {
         this.workspaceDir = new File(baseDir, "workspace");
         this.tmpDir = new File(baseDir, "tmp");
         this.cacheDir = new File(baseDir, "cache");
-        this.logFile = new File(baseDir, "goar.log");
         this.resolverFile = new File(baseDir, "resolv.conf");
         this.nativeRuntimeDir = new File(baseDir, "native-runtime");
         this.preferences = this.context.getSharedPreferences("goar_runtime", Context.MODE_PRIVATE);
@@ -84,12 +80,9 @@ public final class GoarRuntimeController {
 
     public synchronized boolean isInstalled() {
         return new File(rootfsDir, ".goar-rootfs.json").isFile()
-                && new File(rootfsDir, "opt/goar/goar.py").isFile()
-                && new File(rootfsDir, "usr/local/bin/goar-serve").isFile();
-    }
-
-    public synchronized boolean isRunning() {
-        return process != null && process.isAlive();
+                && new File(rootfsDir, "usr/local/bin/goar-terminal").isFile()
+                && new File(rootfsDir, "opt/vibehack/.venv/bin/vibehack").isFile()
+                && new File(rootfsDir, "opt/goar-terminal/GOAR_TERMINAL_PROMPT.md").isFile();
     }
 
     public synchronized String configuredManifestUrl() {
@@ -148,23 +141,14 @@ public final class GoarRuntimeController {
         report(reporter, "installed", 100, "GOAR backend installed and verified");
     }
 
-    public synchronized void start(Reporter reporter) throws Exception {
+    /** Opens the Kali guest as a true PTY-backed terminal session. */
+    public synchronized GoarPtyBridge openTerminal(int rows, int columns) throws Exception {
         if (!isInstalled()) {
-            throw new IOException("GOAR rootfs has not been installed");
-        }
-        if (isRunning()) {
-            report(reporter, "running", 100, "GOAR is already running");
-            return;
+            throw new IOException("Kali terminal rootfs has not been installed");
         }
         ensureDirectories();
         writeResolver();
-        // The contained Playwright driver uses this app-private host path to
-        // locate its bundled Node driver when PRoot launches it.
-        writeText(new File(rootfsDir, "etc/goar/host-rootfs-path"), rootfsDir.getAbsolutePath() + "\n");
         File nativeDirectory = new File(context.getApplicationInfo().nativeLibraryDir);
-        // This matching four-file set is built from the Kai-pinned Termux
-        // PRoot revision: primary executable, arm64 loader, armv7 tracee
-        // loader, and talloc. Do not substitute the old libgoar_* payload.
         File proot = new File(nativeDirectory, "libproot.so");
         File loader = new File(nativeDirectory, "libproot-loader.so");
         File loader32 = new File(nativeDirectory, "libproot-loader32.so");
@@ -173,136 +157,35 @@ public final class GoarRuntimeController {
             throw new IOException("The complete dual-loader PRoot bootstrap is unavailable for this device ABI");
         }
         File runtimeLibraryDirectory = prepareNativeRuntimeLibraries(talloc);
-
-        report(reporter, "starting", 0, "Starting the contained GOAR backend");
         List<String> command = new ArrayList<>();
         command.add(proot.getAbsolutePath());
         command.add("-0");
         command.add("-r");
         command.add(rootfsDir.getAbsolutePath());
-        command.add("-b");
-        command.add(stateDir.getAbsolutePath() + ":/data/goar");
-        command.add("-b");
-        command.add(workspaceDir.getAbsolutePath() + ":/data/workspace");
-        command.add("-b");
-        command.add(tmpDir.getAbsolutePath() + ":/tmp");
-        command.add("-b");
-        command.add(resolverFile.getAbsolutePath() + ":/etc/resolv.conf");
-        command.add("-b");
-        command.add("/dev");
-        command.add("-b");
-        command.add("/proc");
-        command.add("-b");
-        command.add("/sys");
-        command.add("-w");
-        command.add("/data/workspace");
-        command.add("/bin/sh");
+        command.add("-b"); command.add(stateDir.getAbsolutePath() + ":/data/goar");
+        command.add("-b"); command.add(workspaceDir.getAbsolutePath() + ":/data/workspace");
+        command.add("-b"); command.add(tmpDir.getAbsolutePath() + ":/tmp");
+        command.add("-b"); command.add(resolverFile.getAbsolutePath() + ":/etc/resolv.conf");
+        command.add("-b"); command.add("/dev");
+        command.add("-b"); command.add("/proc");
+        command.add("-b"); command.add("/sys");
+        command.add("-w"); command.add("/data/workspace");
+        command.add("/bin/bash");
         command.add("-lc");
-        command.add("export GOAR_HOME=/data/goar GOAR_WORKSPACE=/data/workspace "
-                + "GOAR_HOST=127.0.0.1 GOAR_PORT=8080 GOAR_AUTO_INSTALL_DESKTOP=0; "
-                + "exec /usr/local/bin/goar-serve");
-
-        ProcessBuilder builder = new ProcessBuilder(command)
-                .directory(rootfsDir)
-                .redirectErrorStream(true)
-                .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile));
-        builder.environment().clear();
-        builder.environment().put("HOME", "/data/goar");
-        builder.environment().put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-        builder.environment().put("TERM", "xterm-256color");
-        builder.environment().put("LANG", "C.UTF-8");
-        builder.environment().put("TMPDIR", "/tmp");
-        builder.environment().put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
-        builder.environment().put("PROOT_LOADER", loader.getAbsolutePath());
-        // Android's extracted JNI library keeps the primary executable and
-        // both tracee loaders runnable. The app-private directory supplies the
-        // versioned talloc soname requested by the matching PRoot binary.
-        builder.environment().put(
-                "LD_LIBRARY_PATH",
-                runtimeLibraryDirectory.getAbsolutePath() + File.pathSeparator + nativeDirectory.getAbsolutePath()
-        );
-        builder.environment().put("GOAR_ANDROID_SANDBOX", "1");
-        builder.environment().put("GOAR_NATIVE_LIBRARIES", nativeDirectory.getAbsolutePath());
-        process = builder.start();
-        waitForHealth(reporter);
-        report(reporter, "running", 100, "GOAR is ready at http://127.0.0.1:8080/");
-    }
-
-    public synchronized void stop() {
-        if (process != null) {
-            process.destroy();
-            try {
-                Thread.sleep(300);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            if (process.isAlive()) {
-                process.destroyForcibly();
-            }
-            process = null;
-        }
-    }
-
-    public File logFile() {
-        return logFile;
-    }
-
-    private void waitForHealth(Reporter reporter) throws Exception {
-        long deadline = System.currentTimeMillis() + 75_000L;
-        IOException latest = null;
-        while (System.currentTimeMillis() < deadline) {
-            if (process == null || !process.isAlive()) {
-                throw startupFailure("GOAR exited during startup");
-            }
-            try {
-                HttpURLConnection connection = (HttpURLConnection) new URL("http://127.0.0.1:8080/health").openConnection();
-                connection.setConnectTimeout(2_000);
-                connection.setReadTimeout(2_000);
-                if (connection.getResponseCode() == 200) {
-                    connection.disconnect();
-                    return;
-                }
-                connection.disconnect();
-            } catch (IOException error) {
-                latest = error;
-            }
-            report(reporter, "starting", 0, "Waiting for GOAR backend");
-            Thread.sleep(800);
-        }
-        throw startupFailure("GOAR did not become ready", latest);
-    }
-
-    /**
-     * Android users cannot ordinarily browse app-private files. Include a small,
-     * bounded tail of the PRoot/backend log in the reported exception so a launch
-     * failure can be diagnosed from the installation screen without weakening
-     * storage isolation.
-     */
-    private IOException startupFailure(String message) {
-        return startupFailure(message, null);
-    }
-
-    private IOException startupFailure(String message, IOException cause) {
-        String tail = readLogTail();
-        String detail = tail.isEmpty() ? message : message + ": " + tail;
-        return cause == null ? new IOException(detail) : new IOException(detail, cause);
-    }
-
-    private String readLogTail() {
-        if (!logFile.isFile()) {
-            return "";
-        }
-        final int maximumBytes = 12 * 1024;
-        try (RandomAccessFile input = new RandomAccessFile(logFile, "r")) {
-            long start = Math.max(0L, input.length() - maximumBytes);
-            input.seek(start);
-            byte[] bytes = new byte[(int) (input.length() - start)];
-            input.readFully(bytes);
-            String tail = new String(bytes, StandardCharsets.UTF_8).trim();
-            return tail.length() > 2_000 ? tail.substring(tail.length() - 2_000) : tail;
-        } catch (IOException ignored) {
-            return "";
-        }
+        command.add("exec /usr/local/bin/goar-terminal");
+        java.util.LinkedHashMap<String, String> environment = new java.util.LinkedHashMap<>();
+        environment.put("HOME", "/data/goar/home");
+        environment.put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+        environment.put("TERM", "xterm-256color");
+        environment.put("COLORTERM", "truecolor");
+        environment.put("LANG", "C.UTF-8");
+        environment.put("TMPDIR", "/tmp");
+        environment.put("PROOT_TMP_DIR", tmpDir.getAbsolutePath());
+        environment.put("PROOT_LOADER", loader.getAbsolutePath());
+        environment.put("LD_LIBRARY_PATH", runtimeLibraryDirectory.getAbsolutePath() + File.pathSeparator + nativeDirectory.getAbsolutePath());
+        environment.put("GOAR_ANDROID_SANDBOX", "1");
+        environment.put("GOAR_NATIVE_LIBRARIES", nativeDirectory.getAbsolutePath());
+        return GoarPtyBridge.start(command, environment, rootfsDir, rows, columns);
     }
 
     private void writeResolver() throws IOException {

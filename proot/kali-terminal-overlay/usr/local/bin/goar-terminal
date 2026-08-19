@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export GOAR_PROOT_GUEST=1
+export GOAR_WORKSPACE="${GOAR_WORKSPACE:-/data/workspace}"
+export GOAR_CONTROL_ROOT="${GOAR_CONTROL_ROOT:-/data/goar/control}"
+export GOAR_RUNTIME_TMP="${GOAR_RUNTIME_TMP:-/data/goar/tmp}"
+export GOAR_SESSION_ID="${GOAR_SESSION_ID:-terminal}"
+export HOME="${HOME:-/data/goar/home}"
+export TMPDIR="$GOAR_RUNTIME_TMP"
+export VH_SANDBOX=true
+export VH_SYSTEM_PROMPT="/opt/goar-terminal/GOAR_TERMINAL_PROMPT.md"
+export PYTHONPATH="/opt/goar-terminal${PYTHONPATH:+:$PYTHONPATH}"
+export PATH="/opt/vibehack/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+export TERM="${TERM:-xterm-256color}"
+export COLORTERM="${COLORTERM:-truecolor}"
+
+mkdir -p "$GOAR_WORKSPACE" "$GOAR_CONTROL_ROOT" "$GOAR_RUNTIME_TMP" "$HOME" /data/goar/logs
+
+if [[ "${GOAR_DISABLE_LOOPS:-0}" != "1" ]]; then
+  pid_file=/data/goar/loopd.pid
+  if [[ -f "$pid_file" ]]; then
+    loop_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -z "$loop_pid" ]] || ! kill -0 "$loop_pid" 2>/dev/null; then
+      rm -f "$pid_file"
+    fi
+  fi
+  if [[ ! -f "$pid_file" ]]; then
+    (
+      exec /opt/vibehack/.venv/bin/python /opt/goar-terminal/goar_loopd.py \
+        >>/data/goar/logs/loopd.log 2>&1
+    ) &
+    echo "$!" > "$pid_file"
+  fi
+fi
+
+cd "$GOAR_WORKSPACE"
+exec /opt/vibehack/.venv/bin/vibehack "$@"

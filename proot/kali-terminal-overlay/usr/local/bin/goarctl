@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export GOAR_CONTROL_ROOT="${GOAR_CONTROL_ROOT:-/data/goar/control}"
+export GOAR_WORKSPACE="${GOAR_WORKSPACE:-/data/workspace}"
+export GOAR_SESSION_ID="${GOAR_SESSION_ID:-terminal}"
+export PYTHONPATH="/opt/goar-terminal${PYTHONPATH:+:$PYTHONPATH}"
+exec /opt/vibehack/.venv/bin/python /opt/goar-terminal/goarctl.py "$@"

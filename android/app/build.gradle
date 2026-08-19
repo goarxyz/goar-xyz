@@ -24,12 +24,17 @@ android {
         applicationId 'com.goar.os'
         minSdk 26
         targetSdk 35
-        versionCode 4
-        versionName '1.0.3'
+        versionCode 5
+        versionName '1.1.0'
         buildConfigField 'String', 'DEFAULT_MANIFEST_URL', '"' + requestedManifestUrl.replace('\\', '\\\\').replace('"', '\\"') + '"'
         buildConfigField 'String', 'TARGET_ROOTFS_ARCH', '"' + requestedAbi.replace('\\', '\\\\').replace('"', '\\"') + '"'
         ndk {
             abiFilters requestedAbi
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags ''
+            }
         }
     }
 
@@ -59,6 +64,13 @@ android {
             if (hasReleaseSigning) {
                 signingConfig signingConfigs.release
             }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
         }
     }
 

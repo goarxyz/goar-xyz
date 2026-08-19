@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# VibeHack Uninstaller
+# Usage: curl -fsSL https://raw.githubusercontent.com/rasyiqi-code/VibeHack/main/uninstall.sh | bash
+
+# Fetch version dynamically from GitHub
+VERSION=$(curl -s https://raw.githubusercontent.com/rasyiqi-code/VibeHack/main/pyproject.toml | grep -m 1 version | sed 's/version = "\(.*\)"/\1/' || echo "2.3.0")
+
+echo -e "\033[1;31m"
+echo "╔══════════════════════════════════════════╗"
+echo "║  🗑️  Vibe_Hack v$VERSION Uninstaller       ║"
+echo "╚══════════════════════════════════════════╝"
+echo -e "\033[0m"
+
+confirm() {
+    # We read from /dev/tty because when piped from curl, stdin is the pipe
+    read -r -p "${1:-Are you sure? [y/N]} " response < /dev/tty
+    case "$response" in
+        [yY][eE][sS]|[yY])
+            true
+            ;;
+        *)
+            false
+            ;;
+    esac
+}
+
+if confirm "This will remove VibeHack core, your memory database, and all session logs. Continue? [y/N]"; then
+    echo "[+] Removing isolated environment (~/.vibehack-env)..."
+    rm -rf "$HOME/.vibehack-env"
+
+    echo "[+] Removing configuration and database (~/.vibehack)..."
+    rm -rf "$HOME/.vibehack"
+
+    echo "[+] Removing symlink (~/.local/bin/vibehack)..."
+    rm -f "$HOME/.local/bin/vibehack"
+
+    echo -e "\n\033[1;32m[✓] VibeHack has been completely removed from your system.\033[0m"
+else
+    echo "[i] Uninstallation cancelled."
+fi

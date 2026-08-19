@@ -73,3 +73,14 @@ android/release-signing.properties
 android/*.jks
 android/app/build/
 android/.idea/
+
+# Kali terminal PRoot reproducible-build intermediates and downloaded inputs
+proot/.kali-terminal-stage/
+proot/kali-sources/
+proot/tools/get-pip.py
+proot/kali-terminal-rootfs-build.log
+
+# Local Android native build cache and validation logs
+android/app/.cxx/
+android/*.log
+test-output*.log

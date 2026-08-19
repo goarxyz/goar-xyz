@@ -33,13 +33,12 @@ public final class GoarRuntimeService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
-            runtime.stop();
-            emit("stopped", 0, "GOAR has stopped");
+            emit("stopped", 0, "GOAR terminal service has stopped");
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
             return START_NOT_STICKY;
         }
-        startForeground(NOTIFICATION_ID, notification("Preparing contained GOAR backend"));
+        startForeground(NOTIFICATION_ID, notification("Preparing contained Kali terminal"));
         String requestedManifest = intent == null ? null : intent.getStringExtra(EXTRA_MANIFEST_URL);
         executor.execute(() -> run(action, requestedManifest));
         return START_STICKY;
@@ -53,7 +52,10 @@ public final class GoarRuntimeService extends Service {
                 }
                 runtime.install(this::emit);
             }
-            runtime.start(this::emit);
+            if (!runtime.isInstalled()) {
+                throw new IllegalStateException("Kali terminal rootfs is not installed");
+            }
+            emit("running", 100, "Kali terminal is ready. Open Workspace to begin.");
         } catch (Exception error) {
             emit("error", 0, error.getMessage() == null ? error.toString() : error.getMessage());
             stopForeground(STOP_FOREGROUND_DETACH);
@@ -80,7 +82,7 @@ public final class GoarRuntimeService extends Service {
                     "GOAR runtime",
                     NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Keeps the local GOAR sandbox backend available");
+            channel.setDescription("Keeps the local GOAR Kali terminal sandbox available");
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
     }
@@ -96,7 +98,6 @@ public final class GoarRuntimeService extends Service {
 
     @Override
     public void onDestroy() {
-        runtime.stop();
         executor.shutdownNow();
         super.onDestroy();
     }
